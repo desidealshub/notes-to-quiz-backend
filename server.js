@@ -6,7 +6,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const multer = require('multer'); // 👈 1. Multer imported for file uploads
+const multer = require('multer');
 
 // 1. FIREBASE SECURE CONNECTION
 try {
@@ -49,11 +49,10 @@ app.use(cors({
     methods: ['GET', 'POST']
 }));
 
-// PAYLOAD LIMITER (Increased to allow JSON configs)
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// ANTI-DDOS / SPAM GUARD (Rate Limiter)
+// ANTI-DDOS / SPAM GUARD
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 50, 
@@ -64,7 +63,6 @@ const apiLimiter = rateLimit({
     standardHeaders: true, 
     legacyHeaders: false, 
 });
-
 app.use('/api/', apiLimiter);
 
 // ==========================================
@@ -76,7 +74,7 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_SECRET || 'dummysecret'
 });
 
-// GEMINI AI SDK SETUP (Google Gen AI)
+// GEMINI AI SDK SETUP
 const { GoogleGenAI } = require('@google/genai');
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -92,7 +90,6 @@ const verifyAuthToken = async (req, res, next) => {
             const decodedToken = await admin.auth().verifyIdToken(token);
             req.user = { uid: decodedToken.uid, email: decodedToken.email };
         } else {
-            // Default fallback for guest testing mode
             req.user = { uid: 'guest_user', email: 'guest@desidealshub.com' };
         }
         next();
@@ -102,8 +99,6 @@ const verifyAuthToken = async (req, res, next) => {
         next();
     }
 };
-
-// Apply auth middleware globally to all API routes
 app.use('/api/v1/', verifyAuthToken);
 
 
@@ -115,10 +110,10 @@ app.use('/api/v1/', verifyAuthToken);
 app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
+
 // 2. AI Quiz Generation Route
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     try {
-        // 🔥 DEBUG LOGS: Ye Render console me sachai bata denge
         console.log("🚀 --- NEW QUIZ REQUEST ---");
         console.log("👤 USER ID:", req.user ? req.user.uid : "UNDEFINED");
         console.log("📁 FILES RECEIVED:", req.files ? req.files.length : 0);
@@ -132,9 +127,10 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         const qCount = Number(questionCount) || 10;
         const userId = req.user ? req.user.uid : 'guest_user';
         
-        // Agar yahan userId 'guest_user' aaya, toh credits deduct nahi honge
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
+        let finalRemainingCredits = "Skipped (Guest)"; // Default for guest
 
+        // Credit Deduction Logic
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             try {
@@ -145,9 +141,10 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                         currentCredits = Number(userDoc.data().credits);
                     }
                     if (currentCredits < requiredCredits) {
-                        throw new Error(`Insufficient credits!`);
+                        throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
                     }
-                    transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
+                    finalRemainingCredits = currentCredits - requiredCredits;
+                    transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
                 });
             } catch (dbError) {
                 return res.status(400).json({ success: false, error: dbError.message });
@@ -156,15 +153,23 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
 
-        const prompt = `You are an expert academic examiner and OCR parser. 
-        CRITICAL INSTRUCTION: Analyze the attached image/file very carefully. You MUST generate exactly ${qCount} multiple choice questions (MCQs) strictly and exclusively based on the content, text, alphabets, words, objects, or data visible inside the attached image. Do NOT generate generic textbook or grammar questions from your general knowledge if they are not present in the image.
-        Primary focus: Extract facts and data directly from the image.
-        Subject context (secondary): "${finalSubject}"
+        // 🔥 UPDATED PROMPT: Strict Image Enforcement & No Markdown Formatting
+        const prompt = `You are an expert academic examiner.
+        CRITICAL INSTRUCTION: Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content, text, or objects inside the image. Do NOT invent general knowledge questions outside the image context.
+        Subject context: "${finalSubject}"
         
-        Return ONLY a JSON array of objects. Schema:
-        { "question": "...", "options": { "A": "...", "B": "...", "C": "...", "D": "..." }, "correctAnswer": "A", "explanation": "..." }`;
+        WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), italics, or newlines (\n) INSIDE the JSON values. Keep all text plain and raw.
+        
+        Return ONLY a JSON array of objects strictly matching this schema:
+        [
+          { 
+            "question": "Question text here", 
+            "options": { "A": "First option", "B": "Second option", "C": "Third option", "D": "Fourth option" }, 
+            "correctAnswer": "A", 
+            "explanation": "Explanation text here" 
+          }
+        ]`;
 
-        // 🔥 GEMINI FIX: Text aur Image ko alag-alag parts me bhejna zaroori hai
         const parts = [{ text: prompt }];
         
         if (req.files && req.files.length > 0) {
@@ -176,30 +181,31 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                     }
                 });
             });
-        } else {
-            console.warn("⚠️ WARNING: NO IMAGES SENT TO GEMINI!");
         }
 
+        // Official Stable Model
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash', // Jo model tera chal raha hai
-            contents: parts, // Changed to parts array
+            model: 'gemini-2.5-flash', 
+            contents: parts, 
         });
 
         const rawText = response.text;
         const cleanedJSON = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
         const quizArray = JSON.parse(cleanedJSON);
 
+        // Send actual remaining credits number to frontend
         res.status(200).json({ 
             success: true, 
             quizArray,
-            remainingCredits: userId !== 'guest_user' ? "Updated" : "Skipped (Guest)"
+            remainingCredits: finalRemainingCredits
         });
 
     } catch (error) {
         console.error("🚨 AI Generation Error:", error);
-        res.status(500).json({ success: false, error: "Generation failed." });
+        res.status(500).json({ success: false, error: "Generation failed. Ensure image is clear." });
     }
 });
+
 // 3. Save Quiz History Route (Firestore)
 app.post('/api/v1/save-history', async (req, res) => {
     try {
