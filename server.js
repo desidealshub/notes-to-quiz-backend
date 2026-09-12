@@ -116,7 +116,7 @@ app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
 
-// 2. AI Quiz Generation Route (Updated with Multer & Multimodal Gemini Support)
+// 2. AI Quiz Generation Route (Strict Image OCR & Multimodal Support)
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     try {
         // Parse config sent as stringified JSON inside FormData
@@ -137,14 +137,20 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             return res.status(400).json({ success: false, error: "Subject aur question count zaroori hai." });
         }
 
-        const prompt = `You are an expert academic examiner. Analyze the attached notes/images carefully and generate exactly ${questionCount} multiple choice questions (MCQs) for the subject "${subject}" at "${difficulty || 'medium'}" difficulty level targeting "${targetLevel || 'general'}". 
+        const prompt = `You are an expert academic examiner and OCR parser. 
+        CRITICAL INSTRUCTION: Analyze the attached image/file very carefully. You MUST generate exactly ${questionCount} multiple choice questions (MCQs) strictly and exclusively based on the content, text, alphabets, words, objects, or data visible inside the attached image. Do NOT generate generic textbook or grammar questions from your general knowledge if they are not present in the image.
+        Primary focus: Extract facts and data directly from the image.
+        Subject context (secondary): "${subject}"
+        Difficulty: "${difficulty || 'medium'}"
+        Target Level: "${targetLevel || 'general'}". 
+
         You MUST return ONLY a valid JSON array of objects. Do not include markdown formatting like \`\`\`json or any extra conversational text. 
         Each object must strictly match this schema:
         {
-          "question": "Question text here",
+          "question": "Question text derived directly from the image content",
           "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
           "correctAnswer": "A",
-          "explanation": "Detailed explanation here"
+          "explanation": "Detailed explanation based on the image"
         }`;
 
         // Prepare contents array for Gemini (Text prompt + Attached Image parts)
@@ -176,7 +182,6 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         res.status(500).json({ success: false, error: "AI quiz generation fail ho gaya. Kripya dobara try karein." });
     }
 });
-
 // 3. Save Quiz History Route (Firestore)
 app.post('/api/v1/save-history', async (req, res) => {
     try {
