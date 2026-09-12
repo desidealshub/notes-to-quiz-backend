@@ -116,7 +116,7 @@ app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
 
-// 2. AI Quiz Generation Route (Strict Image OCR & Multimodal Support)
+// 2. AI Quiz Generation Route (With Credit Deduction, Strict OCR & Optional Subject)
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     try {
         // Parse config sent as stringified JSON inside FormData
@@ -133,14 +133,50 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
         const { subject, questionCount, difficulty, targetLevel } = config;
 
-        if (!subject || !questionCount) {
-            return res.status(400).json({ success: false, error: "Subject aur question count zaroori hai." });
+        if (!questionCount) {
+            return res.status(400).json({ success: false, error: "Question count zaroori hai." });
         }
 
+        const userId = req.user ? req.user.uid : 'guest_user';
+        const qCount = Number(questionCount) || 10;
+        
+        // Credit calculation: 0.5 per question, minimum 3 credits
+        const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
+
+        // 1. Check and deduct credits from Firestore (Skipping for guest_user)
+        if (userId !== 'guest_user') {
+            const userRef = db.collection('users').doc(userId);
+            
+            try {
+                await db.runTransaction(async (transaction) => {
+                    const userDoc = await transaction.get(userRef);
+                    
+                    let currentCredits = 30; // Default new user bonus
+                    if (userDoc.exists && userDoc.data().credits !== undefined) {
+                        currentCredits = Number(userDoc.data().credits);
+                    }
+
+                    if (currentCredits < requiredCredits) {
+                        throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain, lekin is quiz ke liye ${requiredCredits} credits chahiye.`);
+                    }
+
+                    // Deduct credits safely
+                    transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
+                });
+            } catch (dbError) {
+                return res.status(400).json({ success: false, error: dbError.message });
+            }
+        }
+
+        // Subject optional handling (agar khali ho toh AI khud detect karega)
+        const finalSubject = (subject && subject.trim() !== "" && subject !== "Select primary subject...") 
+            ? subject 
+            : "Auto-Detected from Notes / Image Content";
+
         const prompt = `You are an expert academic examiner and OCR parser. 
-        CRITICAL INSTRUCTION: Analyze the attached image/file very carefully. You MUST generate exactly ${questionCount} multiple choice questions (MCQs) strictly and exclusively based on the content, text, alphabets, words, objects, or data visible inside the attached image. Do NOT generate generic textbook or grammar questions from your general knowledge if they are not present in the image.
+        CRITICAL INSTRUCTION: Analyze the attached image/file very carefully. You MUST generate exactly ${qCount} multiple choice questions (MCQs) strictly and exclusively based on the content, text, alphabets, words, objects, or data visible inside the attached image. Do NOT generate generic textbook or grammar questions from your general knowledge if they are not present in the image.
         Primary focus: Extract facts and data directly from the image.
-        Subject context (secondary): "${subject}"
+        Subject context (secondary): "${finalSubject}"
         Difficulty: "${difficulty || 'medium'}"
         Target Level: "${targetLevel || 'general'}". 
 
@@ -153,7 +189,6 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
           "explanation": "Detailed explanation based on the image"
         }`;
 
-        // Prepare contents array for Gemini (Text prompt + Attached Image parts)
         const contents = [prompt];
         
         if (req.files && req.files.length > 0) {
@@ -168,7 +203,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         }
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
+            model: 'gemini-2.5-flash',
             contents: contents,
         });
 
