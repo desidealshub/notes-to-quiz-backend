@@ -115,52 +115,38 @@ app.use('/api/v1/', verifyAuthToken);
 app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
-
-// 2. AI Quiz Generation Route (With Credit Deduction, Strict OCR & Optional Subject)
+// 2. AI Quiz Generation Route
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     try {
-        // Parse config sent as stringified JSON inside FormData
+        // 🔥 DEBUG LOGS: Ye Render console me sachai bata denge
+        console.log("🚀 --- NEW QUIZ REQUEST ---");
+        console.log("👤 USER ID:", req.user ? req.user.uid : "UNDEFINED");
+        console.log("📁 FILES RECEIVED:", req.files ? req.files.length : 0);
+
         let config = {};
         if (req.body.config) {
-            try {
-                config = JSON.parse(req.body.config);
-            } catch (e) {
-                config = req.body;
-            }
-        } else {
-            config = req.body;
-        }
+            try { config = JSON.parse(req.body.config); } catch (e) { config = req.body; }
+        } else { config = req.body; }
 
         const { subject, questionCount, difficulty, targetLevel } = config;
-
-        if (!questionCount) {
-            return res.status(400).json({ success: false, error: "Question count zaroori hai." });
-        }
-
-        const userId = req.user ? req.user.uid : 'guest_user';
         const qCount = Number(questionCount) || 10;
+        const userId = req.user ? req.user.uid : 'guest_user';
         
-        // Credit calculation: 0.5 per question, minimum 3 credits
+        // Agar yahan userId 'guest_user' aaya, toh credits deduct nahi honge
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
 
-        // 1. Check and deduct credits from Firestore (Skipping for guest_user)
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
-            
             try {
                 await db.runTransaction(async (transaction) => {
                     const userDoc = await transaction.get(userRef);
-                    
-                    let currentCredits = 30; // Default new user bonus
+                    let currentCredits = 30; 
                     if (userDoc.exists && userDoc.data().credits !== undefined) {
                         currentCredits = Number(userDoc.data().credits);
                     }
-
                     if (currentCredits < requiredCredits) {
-                        throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain, lekin is quiz ke liye ${requiredCredits} credits chahiye.`);
+                        throw new Error(`Insufficient credits!`);
                     }
-
-                    // Deduct credits safely
                     transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
                 });
             } catch (dbError) {
@@ -168,53 +154,50 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        // Subject optional handling (agar khali ho toh AI khud detect karega)
-        const finalSubject = (subject && subject.trim() !== "" && subject !== "Select primary subject...") 
-            ? subject 
-            : "Auto-Detected from Notes / Image Content";
+        const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
 
         const prompt = `You are an expert academic examiner and OCR parser. 
         CRITICAL INSTRUCTION: Analyze the attached image/file very carefully. You MUST generate exactly ${qCount} multiple choice questions (MCQs) strictly and exclusively based on the content, text, alphabets, words, objects, or data visible inside the attached image. Do NOT generate generic textbook or grammar questions from your general knowledge if they are not present in the image.
         Primary focus: Extract facts and data directly from the image.
         Subject context (secondary): "${finalSubject}"
-        Difficulty: "${difficulty || 'medium'}"
-        Target Level: "${targetLevel || 'general'}". 
+        
+        Return ONLY a JSON array of objects. Schema:
+        { "question": "...", "options": { "A": "...", "B": "...", "C": "...", "D": "..." }, "correctAnswer": "A", "explanation": "..." }`;
 
-        You MUST return ONLY a valid JSON array of objects. Do not include markdown formatting like \`\`\`json or any extra conversational text. 
-        Each object must strictly match this schema:
-        {
-          "question": "Question text derived directly from the image content",
-          "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
-          "correctAnswer": "A",
-          "explanation": "Detailed explanation based on the image"
-        }`;
-
-        const contents = [prompt];
+        // 🔥 GEMINI FIX: Text aur Image ko alag-alag parts me bhejna zaroori hai
+        const parts = [{ text: prompt }];
         
         if (req.files && req.files.length > 0) {
             req.files.forEach(file => {
-                contents.push({
+                parts.push({
                     inlineData: {
                         data: file.buffer.toString("base64"),
                         mimeType: file.mimetype
                     }
                 });
             });
+        } else {
+            console.warn("⚠️ WARNING: NO IMAGES SENT TO GEMINI!");
         }
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
-            contents: contents,
+            model: 'gemini-3.6-flash', // Jo model tera chal raha hai
+            contents: parts, // Changed to parts array
         });
 
         const rawText = response.text;
         const cleanedJSON = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
         const quizArray = JSON.parse(cleanedJSON);
 
-        res.status(200).json({ success: true, quizArray });
+        res.status(200).json({ 
+            success: true, 
+            quizArray,
+            remainingCredits: userId !== 'guest_user' ? "Updated" : "Skipped (Guest)"
+        });
+
     } catch (error) {
         console.error("🚨 AI Generation Error:", error);
-        res.status(500).json({ success: false, error: "AI quiz generation fail ho gaya. Kripya dobara try karein." });
+        res.status(500).json({ success: false, error: "Generation failed." });
     }
 });
 // 3. Save Quiz History Route (Firestore)
