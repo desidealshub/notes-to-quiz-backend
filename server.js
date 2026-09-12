@@ -185,7 +185,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
         // Official Stable Model
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
+            model: 'gemini-3.6-flash', 
             contents: parts, 
         });
 
