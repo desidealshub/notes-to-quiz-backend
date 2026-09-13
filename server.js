@@ -320,6 +320,65 @@ app.post('/api/v1/save-history', async (req, res) => {
     }
 });
 
+// =======================================================================
+// 🔥 5. TEACHER ANALYTICS DASHBOARD (SECURE FETCH) 🔥
+// =======================================================================
+app.get('/api/v1/class-analytics/:code', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized. Please log in." });
+        }
+
+        const classCode = xss(req.params.code.trim().toUpperCase());
+        
+        const classDoc = await db.collection('LiveExams').doc(classCode).get();
+        if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class code not found." });
+        
+        const classData = classDoc.data();
+        if (classData.instructorUid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Access Denied. Only the teacher who created this test can view its analytics." });
+        }
+
+        const historySnapshot = await db.collection('history').where('groupCode', '==', classCode).get();
+        
+        let studentResults = [];
+        let totalScoreSum = 0;
+        let maxPossibleScore = classData.quizData.length;
+
+        historySnapshot.forEach(doc => {
+            const data = doc.data();
+            totalScoreSum += data.score;
+            studentResults.push({
+                id: doc.id,
+                name: data.candidateDetails?.name || "Unknown",
+                rollNo: data.candidateDetails?.rollNo || "N/A",
+                batch: data.candidateDetails?.batchTime || "N/A",
+                score: data.score,
+                timeTaken: data.time || "Unknown",
+                submittedAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+                userAnswers: data.userAnswers
+            });
+        });
+
+        const avgScore = studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0;
+        const avgPercentage = maxPossibleScore > 0 ? (avgScore / maxPossibleScore) * 100 : 0;
+
+        res.status(200).json({
+            success: true,
+            analytics: {
+                className: classData.name,
+                totalStudents: studentResults.length,
+                averagePercentage: avgPercentage.toFixed(1),
+                maxScore: maxPossibleScore,
+                students: studentResults
+            }
+        });
+    } catch (error) {
+        console.error("🚨 Analytics Error:", error);
+        res.status(500).json({ success: false, error: "Server failed to compile analytics." });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Production Server running on port ${PORT}`);
