@@ -88,14 +88,14 @@ const verifyAuthToken = async (req, res, next) => {
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split('Bearer ')[1];
             const decodedToken = await admin.auth().verifyIdToken(token);
-            req.user = { uid: decodedToken.uid, email: decodedToken.email };
+            req.user = { uid: decodedToken.uid, email: decodedToken.email, name: decodedToken.name || 'User' };
         } else {
-            req.user = { uid: 'guest_user', email: 'guest@desidealshub.com' };
+            req.user = { uid: 'guest_user', email: 'guest@desidealshub.com', name: 'Guest' };
         }
         next();
     } catch (error) {
         console.warn("⚠️ Auth token verification failed, falling back to guest:", error.message);
-        req.user = { uid: 'guest_user', email: 'guest@desidealshub.com' };
+        req.user = { uid: 'guest_user', email: 'guest@desidealshub.com', name: 'Guest' };
         next();
     }
 };
@@ -106,111 +106,197 @@ app.use('/api/v1/', verifyAuthToken);
 // --- API ROUTES ---
 // ==========================================
 
-// 1. Health Check Route
 app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
 
-// 2. AI Quiz Generation Route
+// =======================================================================
+// 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (Personal Study) 🔥
+// =======================================================================
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     try {
-        console.log("🚀 --- NEW QUIZ REQUEST ---");
-        console.log("👤 USER ID:", req.user ? req.user.uid : "UNDEFINED");
-        console.log("📧 USER EMAIL:", req.user ? req.user.email : "UNDEFINED");
-        console.log("📁 FILES RECEIVED:", req.files ? req.files.length : 0);
-
-        let config = {};
-        if (req.body.config) {
-            try { config = JSON.parse(req.body.config); } catch (e) { config = req.body; }
-        } else { config = req.body; }
-
-        const { subject, questionCount, difficulty, targetLevel } = config;
+        let config = req.body.config ? JSON.parse(req.body.config) : req.body;
+        const { subject, questionCount } = config;
         const qCount = Number(questionCount) || 10;
-        const userId = req.user ? req.user.uid : 'guest_user';
+        const userId = req.user.uid;
         
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
-        let finalRemainingCredits = "Skipped (Guest)"; // Default for guest
+        let finalRemainingCredits = "Skipped (Guest)";
 
-        // Credit Deduction Logic (Secure Transaction)
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
-            try {
-                await db.runTransaction(async (transaction) => {
-                    const userDoc = await transaction.get(userRef);
-                    let currentCredits = 30; 
-                    if (userDoc.exists && userDoc.data().credits !== undefined) {
-                        currentCredits = Number(userDoc.data().credits);
-                    }
-                    if (currentCredits < requiredCredits) {
-                        throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
-                    }
-                    finalRemainingCredits = currentCredits - requiredCredits;
-                    transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
-                });
-            } catch (dbError) {
-                return res.status(400).json({ success: false, error: dbError.message });
-            }
+            await db.runTransaction(async (transaction) => {
+                const userDoc = await transaction.get(userRef);
+                let currentCredits = 30; 
+                if (userDoc.exists && userDoc.data().credits !== undefined) {
+                    currentCredits = Number(userDoc.data().credits);
+                }
+                if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
+                finalRemainingCredits = currentCredits - requiredCredits;
+                transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
+            });
         }
 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
 
-        // 🔥 UPDATED PROMPT: Strict Image Enforcement & No Markdown Formatting
         const prompt = `You are an expert academic examiner.
-        CRITICAL INSTRUCTION: Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content, text, or objects inside the image. Do NOT invent general knowledge questions outside the image context.
+        Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content. 
         Subject context: "${finalSubject}"
-        
         WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), italics, or newlines (\n) INSIDE the JSON values. Keep all text plain and raw.
-        
         Return ONLY a JSON array of objects strictly matching this schema:
-        [
-          { 
-            "question": "Question text here", 
-            "options": { "A": "First option", "B": "Second option", "C": "Third option", "D": "Fourth option" }, 
-            "correctAnswer": "A", 
-            "explanation": "Explanation text here" 
-          }
-        ]`;
+        [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
 
         const parts = [{ text: prompt }];
-        
-        if (req.files && req.files.length > 0) {
-            req.files.forEach(file => {
-                parts.push({
-                    inlineData: {
-                        data: file.buffer.toString("base64"),
-                        mimeType: file.mimetype
-                    }
-                });
-            });
+        if (req.files) {
+            req.files.forEach(file => { parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); });
         }
 
-        // Official Stable Model
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash', 
-            contents: parts, 
-        });
+        const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
+        const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
 
-        const rawText = response.text;
-        const cleanedJSON = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const quizArray = JSON.parse(cleanedJSON);
-
-        // Send actual remaining credits number to frontend
-        res.status(200).json({ 
-            success: true, 
-            quizArray,
-            remainingCredits: finalRemainingCredits
-        });
+        res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
     } catch (error) {
-        console.error("🚨 AI Generation Error:", error);
-        res.status(500).json({ success: false, error: "Generation failed. Ensure image is clear." });
+        console.error("🚨 Individual Generation Error:", error);
+        res.status(500).json({ success: false, error: error.message || "Generation failed." });
     }
 });
 
-// 3. Save Quiz History Route (Firestore)
+// =======================================================================
+// 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
+// =======================================================================
+app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
+        }
+
+        let config = req.body.config ? JSON.parse(req.body.config) : req.body;
+        const { className, duration, expiryHours, requireBatch, mode, questionCount } = config;
+
+        if (!className || !duration || Number(duration) < 5) {
+            return res.status(400).json({ success: false, error: "Invalid class details." });
+        }
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, error: "Please upload test paper / answer key files." });
+        }
+
+        const qCount = Number(questionCount) || 15;
+        const userId = req.user.uid;
+        
+        // Teachers also pay credits to generate a group test (Bulk test generation fee)
+        const requiredCredits = Math.max(5, Math.ceil(qCount * 0.5));
+        
+        const userRef = db.collection('users').doc(userId);
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            let currentCredits = 30; 
+            if (userDoc.exists && userDoc.data().credits !== undefined) {
+                currentCredits = Number(userDoc.data().credits);
+            }
+            if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} to generate this group test.`);
+            transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
+        });
+
+        // 🧠 STRICT AI PROMPTING BASED ON TEACHER'S MODE
+        let prompt = "";
+        if (mode === 'manual-key') {
+            // STRICT Answer Key Mapping Mode
+            prompt = `You are a strict data extraction bot. The attached files contain a Question Paper and an Answer Key. 
+            CRITICAL INSTRUCTION: You MUST extract exactly ${qCount} questions from the paper, and you MUST assign the correct answer EXACTLY as provided in the uploaded Answer Key. 
+            DO NOT use your own AI knowledge to solve the questions. ONLY follow the teacher's uploaded answer key. If an explanation is missing, write "Answer per official key."
+            WARNING: DO NOT use markdown formatting inside JSON. 
+            Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
+        } else {
+            // Normal Auto-Gen Mode
+            prompt = `You are an expert academic examiner. Analyze the attached study notes/files. 
+            Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on this content. 
+            WARNING: DO NOT use markdown formatting inside JSON.
+            Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
+        }
+
+        const parts = [{ text: prompt }];
+        req.files.forEach(file => { parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); });
+
+        const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
+        const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
+
+        // 🔒 Generate 99.9999% Secure Random Code
+        const safeName = xss(className).trim();
+        const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
+        const randomSuffix = crypto.randomBytes(2).toString('hex').toUpperCase();
+        const generatedCode = `${prefix}-${randomSuffix}`;
+        
+        const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
+
+        // Save entire test securely to DB
+        await db.collection('LiveExams').doc(generatedCode).set({
+            code: generatedCode,
+            name: safeName,
+            instructorUid: req.user.uid,
+            instructorEmail: req.user.email,
+            instructorName: req.user.name,
+            duration: Number(duration),
+            requireBatch: Boolean(requireBatch),
+            expiresAt: expiresAt,
+            quizData: quizArray, // Test paper saved directly on server
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            status: 'active'
+        });
+
+        res.status(200).json({ success: true, code: generatedCode, expiresAt });
+
+    } catch (error) {
+        console.error("🚨 Class Creation Error:", error);
+        res.status(500).json({ success: false, error: error.message || "Failed to generate class. Check files." });
+    }
+});
+
+// =======================================================================
+// 🔥 3. STUDENT JOINS A CLASS (Verify Code) 🔥
+// =======================================================================
+app.post('/api/v1/verify-class', async (req, res) => {
+    try {
+        const { code } = req.body;
+        if (!code) return res.status(400).json({ success: false, error: "Access code is required." });
+
+        const safeCode = xss(code.trim().toUpperCase());
+        const docRef = await db.collection('LiveExams').doc(safeCode).get();
+
+        if (!docRef.exists) return res.status(404).json({ success: false, error: "Invalid Code. Check with your teacher." });
+
+        const group = docRef.data();
+
+        // Server-Side Time Validation
+        if (Date.now() > group.expiresAt) {
+            return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
+        }
+
+        // Return Data (We now SEND the quizData to the student so they can take the test)
+        res.status(200).json({ 
+            success: true, 
+            group: {
+                code: group.code,
+                name: group.name,
+                instructorEmail: group.instructorEmail,
+                duration: group.duration,
+                requireBatch: group.requireBatch,
+                quizData: group.quizData // The actual test paper
+            }
+        });
+
+    } catch (error) {
+        console.error("🚨 Class Verification Error:", error);
+        res.status(500).json({ success: false, error: "Network error checking code." });
+    }
+});
+
+// =======================================================================
+// 🔥 4. SAVE EXAM HISTORY & SEGREGATION 🔥
+// =======================================================================
 app.post('/api/v1/save-history', async (req, res) => {
     try {
-        const { subject, score, total, quizData, userAnswers, flaggedQuestions } = req.body;
+        const { subject, score, total, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails } = req.body;
         const activeUserId = req.user ? req.user.uid : 'guest_user';
         
         const docRef = await db.collection('history').add({
@@ -218,6 +304,9 @@ app.post('/api/v1/save-history', async (req, res) => {
             subject: xss(subject || 'General'),
             score: Number(score) || 0,
             total: Number(total) || 0,
+            testType: xss(testType || 'individual'), // Distinguishes between 'individual' or 'group_test'
+            groupCode: xss(groupCode || 'none'),     // Saves the TAR-X9A code
+            candidateDetails: candidateDetails || null, // Saves Roll No, Batch, Name
             quizData,
             userAnswers: userAnswers || {},
             flaggedQuestions: flaggedQuestions || [],
@@ -226,97 +315,8 @@ app.post('/api/v1/save-history', async (req, res) => {
 
         res.status(200).json({ success: true, recordId: docRef.id });
     } catch (error) {
-        console.error("🚨 Firestore Error:", error);
+        console.error("🚨 Firestore History Error:", error);
         res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// =======================================================================
-// 🔥 NEW SECURE ROUTES FOR COACHING GROUPS (UN-HACKABLE BACKEND LOGIC) 🔥
-// =======================================================================
-
-// 4. Create Class (Teacher Only)
-app.post('/api/v1/create-class', async (req, res) => {
-    try {
-        if (!req.user || req.user.uid === 'guest_user') {
-            return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
-        }
-
-        const { className, duration, expiryHours, requireBatch } = req.body;
-
-        // Strict Server-Side Validation
-        if (!className || !duration || Number(duration) < 5 || !expiryHours) {
-            return res.status(400).json({ success: false, error: "Invalid data provided. Check duration and class name." });
-        }
-
-        // 🔒 99.99999% Secure Random Code Generation (Using Crypto)
-        const safeName = xss(className).trim();
-        const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
-        const randomSuffix = crypto.randomBytes(2).toString('hex').toUpperCase(); // Creates a highly random 4 character string
-        const generatedCode = `${prefix}-${randomSuffix}`;
-
-        // Secure Server-Side Expiry Calculation
-        const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
-
-        const classData = {
-            code: generatedCode,
-            name: safeName,
-            instructorUid: req.user.uid,
-            instructorEmail: req.user.email, // Email saved for tracking as you requested
-            duration: Number(duration),
-            requireBatch: Boolean(requireBatch),
-            expiresAt: expiresAt,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            status: 'active'
-        };
-
-        // Save securely to DB
-        await db.collection('LiveExams').doc(generatedCode).set(classData);
-
-        res.status(200).json({ success: true, code: generatedCode, expiresAt });
-    } catch (error) {
-        console.error("🚨 Class Creation Error:", error);
-        res.status(500).json({ success: false, error: "Server error while generating code." });
-    }
-});
-
-// 5. Verify & Join Class (Student Logic)
-app.post('/api/v1/verify-class', async (req, res) => {
-    try {
-        const { code } = req.body;
-        if (!code) return res.status(400).json({ success: false, error: "Access code is required." });
-
-        const safeCode = xss(code.trim().toUpperCase());
-        
-        // Fetch direct from Server DB
-        const docRef = await db.collection('LiveExams').doc(safeCode).get();
-
-        if (!docRef.exists) {
-            return res.status(404).json({ success: false, error: "Invalid Code. Check with your teacher." });
-        }
-
-        const group = docRef.data();
-
-        // 🔒 Strict Server-Side Expiry Validation (Un-hackable by client clock changing)
-        if (Date.now() > group.expiresAt) {
-            return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
-        }
-
-        // Return only what the student needs to see (never send answers/raw data here)
-        res.status(200).json({ 
-            success: true, 
-            group: {
-                code: group.code,
-                name: group.name,
-                instructorEmail: group.instructorEmail,
-                duration: group.duration,
-                requireBatch: group.requireBatch
-            }
-        });
-
-    } catch (error) {
-        console.error("🚨 Class Verification Error:", error);
-        res.status(500).json({ success: false, error: "Network error checking code." });
     }
 });
 
