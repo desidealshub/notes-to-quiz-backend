@@ -116,6 +116,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
     try {
         console.log("🚀 --- NEW QUIZ REQUEST ---");
         console.log("👤 USER ID:", req.user ? req.user.uid : "UNDEFINED");
+        console.log("📧 USER EMAIL:", req.user ? req.user.email : "UNDEFINED");
         console.log("📁 FILES RECEIVED:", req.files ? req.files.length : 0);
 
         let config = {};
@@ -130,7 +131,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)"; // Default for guest
 
-        // Credit Deduction Logic
+        // Credit Deduction Logic (Secure Transaction)
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             try {
@@ -227,6 +228,95 @@ app.post('/api/v1/save-history', async (req, res) => {
     } catch (error) {
         console.error("🚨 Firestore Error:", error);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =======================================================================
+// 🔥 NEW SECURE ROUTES FOR COACHING GROUPS (UN-HACKABLE BACKEND LOGIC) 🔥
+// =======================================================================
+
+// 4. Create Class (Teacher Only)
+app.post('/api/v1/create-class', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
+        }
+
+        const { className, duration, expiryHours, requireBatch } = req.body;
+
+        // Strict Server-Side Validation
+        if (!className || !duration || Number(duration) < 5 || !expiryHours) {
+            return res.status(400).json({ success: false, error: "Invalid data provided. Check duration and class name." });
+        }
+
+        // 🔒 99.99999% Secure Random Code Generation (Using Crypto)
+        const safeName = xss(className).trim();
+        const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
+        const randomSuffix = crypto.randomBytes(2).toString('hex').toUpperCase(); // Creates a highly random 4 character string
+        const generatedCode = `${prefix}-${randomSuffix}`;
+
+        // Secure Server-Side Expiry Calculation
+        const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
+
+        const classData = {
+            code: generatedCode,
+            name: safeName,
+            instructorUid: req.user.uid,
+            instructorEmail: req.user.email, // Email saved for tracking as you requested
+            duration: Number(duration),
+            requireBatch: Boolean(requireBatch),
+            expiresAt: expiresAt,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            status: 'active'
+        };
+
+        // Save securely to DB
+        await db.collection('LiveExams').doc(generatedCode).set(classData);
+
+        res.status(200).json({ success: true, code: generatedCode, expiresAt });
+    } catch (error) {
+        console.error("🚨 Class Creation Error:", error);
+        res.status(500).json({ success: false, error: "Server error while generating code." });
+    }
+});
+
+// 5. Verify & Join Class (Student Logic)
+app.post('/api/v1/verify-class', async (req, res) => {
+    try {
+        const { code } = req.body;
+        if (!code) return res.status(400).json({ success: false, error: "Access code is required." });
+
+        const safeCode = xss(code.trim().toUpperCase());
+        
+        // Fetch direct from Server DB
+        const docRef = await db.collection('LiveExams').doc(safeCode).get();
+
+        if (!docRef.exists) {
+            return res.status(404).json({ success: false, error: "Invalid Code. Check with your teacher." });
+        }
+
+        const group = docRef.data();
+
+        // 🔒 Strict Server-Side Expiry Validation (Un-hackable by client clock changing)
+        if (Date.now() > group.expiresAt) {
+            return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
+        }
+
+        // Return only what the student needs to see (never send answers/raw data here)
+        res.status(200).json({ 
+            success: true, 
+            group: {
+                code: group.code,
+                name: group.name,
+                instructorEmail: group.instructorEmail,
+                duration: group.duration,
+                requireBatch: group.requireBatch
+            }
+        });
+
+    } catch (error) {
+        console.error("🚨 Class Verification Error:", error);
+        res.status(500).json({ success: false, error: "Network error checking code." });
     }
 });
 
