@@ -123,6 +123,26 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
 
+        // 🔥 GUEST EXPLOIT FIX: IP-BASED RATE LIMITING
+        if (userId === 'guest_user') {
+            const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const ipHash = crypto.createHash('md5').update(clientIp).digest('hex');
+            const ipRef = db.collection('GuestLimits').doc(ipHash);
+            
+            await db.runTransaction(async (transaction) => {
+                const ipDoc = await transaction.get(ipRef);
+                let attempts = 0;
+                if (ipDoc.exists) attempts = ipDoc.data().attempts || 0;
+                
+                if (attempts >= 2) {
+                    throw new Error("Free trial exhausted for this device/IP. Please log in with Google to continue.");
+                }
+                transaction.set(ipRef, { 
+                    attempts: attempts + 1, 
+                    lastUsed: admin.firestore.FieldValue.serverTimestamp() 
+                }, { merge: true });
+            });
+        }
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
