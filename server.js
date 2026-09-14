@@ -198,7 +198,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             try {
                 attempts++;
                 response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash', // Note: Using stable model version to prevent 503 spikes
+                    model: 'gemini-3.6-flash', // Note: Using stable model version to prevent 503 spikes
                     contents: parts
                 });
                 break; // Agar success ho gaya toh loop se bahar aa jao
