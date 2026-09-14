@@ -31,7 +31,7 @@ try {
 
 const db = admin.firestore();
 const app = express();
-
+app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
 // Configure multer for memory storage (Max 10MB per file)
 const upload = multer({ 
     storage: multer.memoryStorage(),
@@ -321,61 +321,87 @@ app.post('/api/v1/save-history', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 5. TEACHER ANALYTICS DASHBOARD (SECURE FETCH) 🔥
+// 🔥 5. TEACHER ANALYTICS DASHBOARD (SECURE FETCH WITH DETAILS) 🔥
 // =======================================================================
 app.get('/api/v1/class-analytics/:code', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') {
-            return res.status(403).json({ success: false, error: "Unauthorized. Please log in." });
-        }
+        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
 
         const classCode = xss(req.params.code.trim().toUpperCase());
-        
         const classDoc = await db.collection('LiveExams').doc(classCode).get();
         if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class code not found." });
         
         const classData = classDoc.data();
-        if (classData.instructorUid !== req.user.uid) {
-            return res.status(403).json({ success: false, error: "Access Denied. Only the teacher who created this test can view its analytics." });
-        }
+        if (classData.instructorUid !== req.user.uid) return res.status(403).json({ success: false, error: "Access Denied." });
 
         const historySnapshot = await db.collection('history').where('groupCode', '==', classCode).get();
         
         let studentResults = [];
         let totalScoreSum = 0;
-        let maxPossibleScore = classData.quizData.length;
 
         historySnapshot.forEach(doc => {
             const data = doc.data();
             totalScoreSum += data.score;
             studentResults.push({
-                id: doc.id,
                 name: data.candidateDetails?.name || "Unknown",
                 rollNo: data.candidateDetails?.rollNo || "N/A",
                 batch: data.candidateDetails?.batchTime || "N/A",
                 score: data.score,
                 timeTaken: data.time || "Unknown",
-                submittedAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+                submittedAt: data.createdAt ? (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : data.createdAt) : null,
                 userAnswers: data.userAnswers
             });
         });
-
-        const avgScore = studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0;
-        const avgPercentage = maxPossibleScore > 0 ? (avgScore / maxPossibleScore) * 100 : 0;
 
         res.status(200).json({
             success: true,
             analytics: {
                 className: classData.name,
                 totalStudents: studentResults.length,
-                averagePercentage: avgPercentage.toFixed(1),
-                maxScore: maxPossibleScore,
+                averagePercentage: classData.quizData.length > 0 ? ((studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0) / classData.quizData.length * 100).toFixed(1) : 0,
+                maxScore: classData.quizData.length,
+                quizData: classData.quizData, // 🔥 Now passing the paper back so teacher sees which Q was wrong
                 students: studentResults
             }
         });
     } catch (error) {
-        console.error("🚨 Analytics Error:", error);
-        res.status(500).json({ success: false, error: "Server failed to compile analytics." });
+        res.status(500).json({ success: false, error: "Server error." });
+    }
+});
+// =======================================================================
+// 🔥 6. STUDENT LEADERBOARD (TOP 10 ONLY) 🔥
+// =======================================================================
+app.get('/api/v1/leaderboard/:code', async (req, res) => {
+    try {
+        const classCode = xss(req.params.code.trim().toUpperCase());
+        const classDoc = await db.collection('LiveExams').doc(classCode).get();
+        if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class not found." });
+
+        const historySnapshot = await db.collection('history').where('groupCode', '==', classCode).get();
+        let students = [];
+        
+        historySnapshot.forEach(doc => {
+            students.push({ name: doc.data().candidateDetails?.name || "Student", score: doc.data().score });
+        });
+
+        // Sort Highest to Lowest
+        students.sort((a, b) => b.score - a.score);
+
+        // Assign Ranks (handling ties)
+        let rankedStudents = [];
+        let currentRank = 1;
+        for(let i=0; i<students.length; i++) {
+            if (i > 0 && students[i].score < students[i-1].score) currentRank = i + 1;
+            rankedStudents.push({ rank: currentRank, name: students[i].name, score: students[i].score });
+        }
+
+        res.status(200).json({
+            success: true,
+            maxScore: classDoc.data().quizData.length,
+            top10: rankedStudents.slice(0, 10) // 🔥 Send ONLY top 10, no sensitive data
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
 
