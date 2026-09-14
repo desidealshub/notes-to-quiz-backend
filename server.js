@@ -419,11 +419,13 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
     }
 });
 // =======================================================================
-// 🔥 6. STUDENT LEADERBOARD (TOP 10 ONLY) 🔥
+// 🔥 6. STUDENT LEADERBOARD (TOP 10 + USER RANK) 🔥
 // =======================================================================
 app.get('/api/v1/leaderboard/:code', async (req, res) => {
     try {
         const classCode = xss(req.params.code.trim().toUpperCase());
+        const studentName = req.query.name ? xss(req.query.name.trim()) : null; 
+
         const classDoc = await db.collection('LiveExams').doc(classCode).get();
         if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class not found." });
 
@@ -434,25 +436,35 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             students.push({ name: doc.data().candidateDetails?.name || "Student", score: doc.data().score });
         });
 
+        // Sort Highest to Lowest
         students.sort((a, b) => b.score - a.score);
 
         let rankedStudents = [];
         let currentRank = 1;
-        for(let i=0; i<students.length; i++) {
+        let currentUserRankData = null;
+
+        for(let i = 0; i < students.length; i++) {
             if (i > 0 && students[i].score < students[i-1].score) currentRank = i + 1;
-            rankedStudents.push({ rank: currentRank, name: students[i].name, score: students[i].score });
+            
+            const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score };
+            rankedStudents.push(rankObj);
+
+            // Save rank if it matches the student requesting it
+            if (studentName && students[i].name.toLowerCase() === studentName.toLowerCase()) {
+                if (!currentUserRankData) currentUserRankData = rankObj;
+            }
         }
 
         res.status(200).json({
             success: true,
             maxScore: classDoc.data().quizData.length,
-            top10: rankedStudents.slice(0, 10) 
+            top10: rankedStudents.slice(0, 10), 
+            userRank: currentUserRankData 
         });
     } catch (error) {
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
-
 // =======================================================================
 // 🔥 7. RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING) 🔥
 // =======================================================================
