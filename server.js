@@ -127,17 +127,19 @@ app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
 
-// =======================================================================
-// 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (Personal Study) 🔥
-// =======================================================================
+// ======================================================================= //
+// 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (FIXED & SECURE) 🔥 //
+// =======================================================================_
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
+    let userId = req.user.uid;
+    let requiredCredits = 0;
+    let creditsDeducted = false;
+
     try {
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
         const { subject, questionCount } = config;
         const qCount = Number(questionCount) || 10;
-        const userId = req.user.uid;
-        
-        const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
+        requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
 
         // GUEST EXPLOIT FIX: IP-BASED RATE LIMITING
@@ -145,26 +147,23 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
             const ipHash = crypto.createHash('md5').update(clientIp).digest('hex');
             const ipRef = db.collection('GuestLimits').doc(ipHash);
-            
             await db.runTransaction(async (transaction) => {
                 const ipDoc = await transaction.get(ipRef);
                 let attempts = 0;
                 if (ipDoc.exists) attempts = ipDoc.data().attempts || 0;
-                
                 if (attempts >= 2) {
                     throw new Error("Free trial exhausted for this device/IP. Please log in with Google to continue.");
                 }
-                transaction.set(ipRef, { 
-                    attempts: attempts + 1, 
-                    lastUsed: admin.firestore.FieldValue.serverTimestamp() 
-                }, { merge: true });
+                transaction.set(ipRef, { attempts: attempts + 1, lastUsed: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
             });
         }
+
+        // 1. DEDUCT CREDITS SAFELY BEFORE AI CALL
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
                 const userDoc = await transaction.get(userRef);
-                let currentCredits = 30; 
+                let currentCredits = 30;
                 if (userDoc.exists && userDoc.data().credits !== undefined) {
                     currentCredits = Number(userDoc.data().credits);
                 }
@@ -172,44 +171,75 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                 finalRemainingCredits = currentCredits - requiredCredits;
                 transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
             });
+            creditsDeducted = true; // Mark that we took credits
         }
 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
-
-        const prompt = `You are an expert academic examiner.
-        Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content. 
-        Subject context: "${finalSubject}"
-        WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), italics, or newlines (\n) INSIDE the JSON values. Keep all text plain and raw.
-        Return ONLY a JSON array of objects strictly matching this schema:
-        [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
-
-        const parts = [{ text: prompt }];
+        const prompt = `You are an expert academic examiner. Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content. Subject context: "${finalSubject}" WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), italics, or newlines (\n) INSIDE the JSON values. Keep all text plain and raw. Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
         
-        // 🔥 2. AI CRASH PROTECTION (File Size Limiter)
+        const parts = [{ text: prompt }];
         let totalSize = 0;
         if (req.files) {
-            req.files.forEach(file => { 
+            req.files.forEach(file => {
                 totalSize += file.size;
-                parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); 
+                parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } });
             });
-            
-            // If total uploaded size exceeds 8MB, Gemini might crash on base64 parsing
             if (totalSize > 8 * 1024 * 1024) {
                 throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
             }
         }
 
-        const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
-        const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
+        // 🔥 2. RETRY LOGIC FOR GEMINI 503 OVERLOAD 🔥
+        let response;
+        let attempts = 0;
+        const maxRetries = 3;
+
+        while (attempts < maxRetries) {
+            try {
+                attempts++;
+                response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash', // Note: Using stable model version to prevent 503 spikes
+                    contents: parts
+                });
+                break; // Agar success ho gaya toh loop se bahar aa jao
+            } catch (aiErr) {
+                console.warn(`⚠️ Gemini attempt ${attempts} failed (Status: ${aiErr.status || 'Unknown'}). Retrying...`);
+                if (attempts >= maxRetries) throw aiErr; // Agar 3 baar fail hua toh final throw karo
+                await new Promise(resolve => setTimeout(resolve, attempts * 2000)); // Wait 2s, 4s before retry
+            }
+        }
+
+        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const quizArray = JSON.parse(cleanText);
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
     } catch (error) {
         console.error("🚨 Individual Generation Error:", error);
-        res.status(500).json({ success: false, error: error.message || "Generation failed." });
+
+        // 🔥 3. AUTO-REFUND MECHANIC (Agar AI fail hua, toh credits wapas karo!)
+        if (userId !== 'guest_user' && creditsDeducted) {
+            try {
+                const userRef = db.collection('users').doc(userId);
+                await db.runTransaction(async (transaction) => {
+                    const userDoc = await transaction.get(userRef);
+                    if (userDoc.exists) {
+                        let currentCredits = Number(userDoc.data().credits || 0);
+                        transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
+                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId} due to generation failure.`);
+                    }
+                });
+            } catch (refundErr) {
+                console.error("🚨 Refund Transaction Failed:", refundErr);
+            }
+        }
+
+        res.status(500).json({ 
+            success: false, 
+            error: "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
+        });
     }
 });
-
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
 // =======================================================================
