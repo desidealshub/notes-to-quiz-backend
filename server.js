@@ -32,6 +32,7 @@ try {
 const db = admin.firestore();
 const app = express();
 app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
+
 // Configure multer for memory storage (Max 10MB per file)
 const upload = multer({ 
     storage: multer.memoryStorage(),
@@ -44,9 +45,25 @@ const upload = multer({
 
 app.use(helmet());
 
+// 🔥 1. STRICT CORS POLICY (Hackers block karne ke liye)
+const allowedOrigins = [
+    'https://desidealshub.com', 
+    'https://quiz.desidealshub.com', 
+    'http://localhost:3000',
+    'http://localhost:5500', 
+    'http://127.0.0.1:5500'
+];
+
 app.use(cors({
-    origin: ['https://desidealshub.com', 'https://quiz.desidealshub.com', 'http://localhost:3000'],
-    methods: ['GET', 'POST']
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('CORS Policy Error: Unauthorized Access'));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '1mb' }));
@@ -123,7 +140,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         const requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
 
-        // 🔥 GUEST EXPLOIT FIX: IP-BASED RATE LIMITING
+        // GUEST EXPLOIT FIX: IP-BASED RATE LIMITING
         if (userId === 'guest_user') {
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
             const ipHash = crypto.createHash('md5').update(clientIp).digest('hex');
@@ -167,8 +184,19 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
 
         const parts = [{ text: prompt }];
+        
+        // 🔥 2. AI CRASH PROTECTION (File Size Limiter)
+        let totalSize = 0;
         if (req.files) {
-            req.files.forEach(file => { parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); });
+            req.files.forEach(file => { 
+                totalSize += file.size;
+                parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); 
+            });
+            
+            // If total uploaded size exceeds 8MB, Gemini might crash on base64 parsing
+            if (totalSize > 8 * 1024 * 1024) {
+                throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
+            }
         }
 
         const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
@@ -204,7 +232,6 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         const qCount = Number(questionCount) || 15;
         const userId = req.user.uid;
         
-        // Teachers also pay credits to generate a group test (Bulk test generation fee)
         const requiredCredits = Math.max(5, Math.ceil(qCount * 0.5));
         
         const userRef = db.collection('users').doc(userId);
@@ -218,17 +245,14 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
         });
 
-        // 🧠 STRICT AI PROMPTING BASED ON TEACHER'S MODE
         let prompt = "";
         if (mode === 'manual-key') {
-            // STRICT Answer Key Mapping Mode
             prompt = `You are a strict data extraction bot. The attached files contain a Question Paper and an Answer Key. 
             CRITICAL INSTRUCTION: You MUST extract exactly ${qCount} questions from the paper, and you MUST assign the correct answer EXACTLY as provided in the uploaded Answer Key. 
             DO NOT use your own AI knowledge to solve the questions. ONLY follow the teacher's uploaded answer key. If an explanation is missing, write "Answer per official key."
             WARNING: DO NOT use markdown formatting inside JSON. 
             Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
         } else {
-            // Normal Auto-Gen Mode
             prompt = `You are an expert academic examiner. Analyze the attached study notes/files. 
             Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on this content. 
             WARNING: DO NOT use markdown formatting inside JSON.
@@ -236,12 +260,21 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         const parts = [{ text: prompt }];
-        req.files.forEach(file => { parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); });
+        
+        // 🔥 AI CRASH PROTECTION (File Size Limiter)
+        let totalSize = 0;
+        req.files.forEach(file => { 
+            totalSize += file.size;
+            parts.push({ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }); 
+        });
+
+        if (totalSize > 8 * 1024 * 1024) {
+            throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
+        }
 
         const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
         const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
 
-        // 🔒 Generate 99.9999% Secure Random Code
         const safeName = xss(className).trim();
         const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
         const randomSuffix = crypto.randomBytes(2).toString('hex').toUpperCase();
@@ -249,7 +282,6 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         
         const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
 
-        // Save entire test securely to DB
         await db.collection('LiveExams').doc(generatedCode).set({
             code: generatedCode,
             name: safeName,
@@ -259,7 +291,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             duration: Number(duration),
             requireBatch: Boolean(requireBatch),
             expiresAt: expiresAt,
-            quizData: quizArray, // Test paper saved directly on server
+            quizData: quizArray, 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
@@ -287,12 +319,10 @@ app.post('/api/v1/verify-class', async (req, res) => {
 
         const group = docRef.data();
 
-        // Server-Side Time Validation
         if (Date.now() > group.expiresAt) {
             return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
         }
 
-        // Return Data (We now SEND the quizData to the student so they can take the test)
         res.status(200).json({ 
             success: true, 
             group: {
@@ -301,7 +331,7 @@ app.post('/api/v1/verify-class', async (req, res) => {
                 instructorEmail: group.instructorEmail,
                 duration: group.duration,
                 requireBatch: group.requireBatch,
-                quizData: group.quizData // The actual test paper
+                quizData: group.quizData 
             }
         });
 
@@ -324,9 +354,9 @@ app.post('/api/v1/save-history', async (req, res) => {
             subject: xss(subject || 'General'),
             score: Number(score) || 0,
             total: Number(total) || 0,
-            testType: xss(testType || 'individual'), // Distinguishes between 'individual' or 'group_test'
-            groupCode: xss(groupCode || 'none'),     // Saves the TAR-X9A code
-            candidateDetails: candidateDetails || null, // Saves Roll No, Batch, Name
+            testType: xss(testType || 'individual'), 
+            groupCode: xss(groupCode || 'none'),     
+            candidateDetails: candidateDetails || null, 
             quizData,
             userAnswers: userAnswers || {},
             flaggedQuestions: flaggedQuestions || [],
@@ -380,7 +410,7 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
                 totalStudents: studentResults.length,
                 averagePercentage: classData.quizData.length > 0 ? ((studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0) / classData.quizData.length * 100).toFixed(1) : 0,
                 maxScore: classData.quizData.length,
-                quizData: classData.quizData, // 🔥 Now passing the paper back so teacher sees which Q was wrong
+                quizData: classData.quizData, 
                 students: studentResults
             }
         });
@@ -404,10 +434,8 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             students.push({ name: doc.data().candidateDetails?.name || "Student", score: doc.data().score });
         });
 
-        // Sort Highest to Lowest
         students.sort((a, b) => b.score - a.score);
 
-        // Assign Ranks (handling ties)
         let rankedStudents = [];
         let currentRank = 1;
         for(let i=0; i<students.length; i++) {
@@ -418,14 +446,15 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         res.status(200).json({
             success: true,
             maxScore: classDoc.data().quizData.length,
-            top10: rankedStudents.slice(0, 10) // 🔥 Send ONLY top 10, no sensitive data
+            top10: rankedStudents.slice(0, 10) 
         });
     } catch (error) {
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
+
 // =======================================================================
-// 🔥 7. RAZORPAY ORDER CREATION (ACTUAL PAYMENT) 🔥
+// 🔥 7. RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING) 🔥
 // =======================================================================
 app.post('/api/v1/create-order', async (req, res) => {
     try {
@@ -435,9 +464,15 @@ app.post('/api/v1/create-order', async (req, res) => {
         if (!amount || amount < 1) return res.status(400).json({ success: false, error: "Invalid amount." });
 
         const options = {
-            amount: amount * 100, // Razorpay takes amount in Paise (e.g., ₹10 = 1000 paise)
+            amount: amount * 100, 
             currency: "INR",
-            receipt: `rcpt_${req.user.uid.substring(0, 5)}_${Date.now()}`
+            // Prefix added for easy tracking in Razorpay Dashboard
+            receipt: `QUIZ_${req.user.uid.substring(0, 5)}_${Date.now()}`,
+            // Custom notes to separate Quiz money from DDH ecommerce money
+            notes: {
+                business: "NotesToQuiz",
+                userEmail: req.user.email
+            }
         };
         
         const order = await razorpay.orders.create(options);
@@ -457,7 +492,6 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd } = req.body;
 
-        // Security Check: Verify Signature to prevent fake payments
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
             .digest('hex');
@@ -466,7 +500,6 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        // Signature Match! Add Credits to DB safely
         const userRef = db.collection('users').doc(req.user.uid);
         await db.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
@@ -484,6 +517,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         res.status(500).json({ success: false, error: "Failed to verify payment." });
     }
 });
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Production Server running on port ${PORT}`);
