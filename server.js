@@ -424,7 +424,66 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
+// =======================================================================
+// 🔥 7. RAZORPAY ORDER CREATION (ACTUAL PAYMENT) 🔥
+// =======================================================================
+app.post('/api/v1/create-order', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Please log in to purchase credits." });
+        
+        const { amount } = req.body;
+        if (!amount || amount < 1) return res.status(400).json({ success: false, error: "Invalid amount." });
 
+        const options = {
+            amount: amount * 100, // Razorpay takes amount in Paise (e.g., ₹10 = 1000 paise)
+            currency: "INR",
+            receipt: `rcpt_${req.user.uid.substring(0, 5)}_${Date.now()}`
+        };
+        
+        const order = await razorpay.orders.create(options);
+        res.status(200).json({ success: true, order });
+    } catch (error) {
+        console.error("Razorpay Order Error:", error);
+        res.status(500).json({ success: false, error: "Failed to connect to payment gateway." });
+    }
+});
+
+// =======================================================================
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION & CREDIT UPDATE 🔥
+// =======================================================================
+app.post('/api/v1/verify-payment', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
+        
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd } = req.body;
+
+        // Security Check: Verify Signature to prevent fake payments
+        const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
+            .update(razorpay_order_id + "|" + razorpay_payment_id)
+            .digest('hex');
+
+        if (generated_signature !== razorpay_signature) {
+            return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
+        }
+
+        // Signature Match! Add Credits to DB safely
+        const userRef = db.collection('users').doc(req.user.uid);
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            let currentCredits = 0;
+            if (userDoc.exists && userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
+            
+            transaction.set(userRef, { 
+                credits: currentCredits + Number(creditsToAdd) 
+            }, { merge: true });
+        });
+
+        res.status(200).json({ success: true, message: "Payment verified successfully." });
+    } catch (error) {
+        console.error("Payment Verification Error:", error);
+        res.status(500).json({ success: false, error: "Failed to verify payment." });
+    }
+});
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Production Server running on port ${PORT}`);
