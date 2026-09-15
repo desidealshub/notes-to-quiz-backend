@@ -108,7 +108,7 @@ async function generateAIContent(parts) {
         try {
             const ai = aiClients[currentClientIndex];
             const response = await ai.models.generateContent({
-                model: 'gemini-3.6-flash', 
+                model: 'gemini-3.6-flash', // Using latest stable model for best accuracy
                 contents: parts
             });
             return response;
@@ -150,38 +150,49 @@ const verifyAuthToken = async (req, res, next) => {
 app.use('/api/v1/', verifyAuthToken);
 
 // =======================================================================
-// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (NEW) 🔥
+// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (UPGRADED FOR EXTREME ACCURACY) 🔥
 // =======================================================================
-function buildExamPersona(academicLevel) {
-    if (academicLevel === "NEET") {
-        return "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons. Frame them exactly like NTA sets them.";
-    } else if (academicLevel === "JEE Mains") {
-        return "Difficulty Standard: JEE Mains. Focus on multi-step application numericals, tricky theoretical twists, and standard analytical problems.";
-    } else if (academicLevel === "JEE Advanced") {
-        return "Difficulty Standard: JEE Advanced. Generate highly rigorous, multi-concept integrated problems combining deep analytical physics/math principles. Avoid direct formulas; focus on deep reasoning and complex calculations.";
-    } else if (["SSC", "Banking", "UPSC", "State PCS"].includes(academicLevel)) {
-        return `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions. CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities topics.`;
+function buildExamPersona(academicLevel, board = null, stream = null) {
+    let persona = "";
+
+    // 10th & 12th Board Specific Logic
+    if (academicLevel === "class10" || academicLevel === "class12") {
+        const levelName = academicLevel === "class10" ? "High School (Class 10th)" : "Senior Secondary (Class 12th)";
+        const boardText = board ? ` You are setting an official paper for the ${board}.` : "";
+        const streamText = stream ? ` Stream: ${stream}.` : "";
+        persona = `Difficulty Standard: ${levelName}.${boardText}${streamText} Focus on standard board exam formats, previous year questions (PYQs), direct theory applications, and deep conceptual clarity.`;
     } 
-    // 🔥 NEW LOCAL/GOVT EXAMS ADDED HERE 🔥
-    else if (academicLevel === "railway") {
-        return "Difficulty Standard: Indian Railway (RRB/NTPC/Group D). Focus heavily on General Science (basic Physics, Chemistry, Biology), Static GK, and straightforward mathematical aptitude. Keep language clear, direct, and factual.";
+    // Competitive Exams
+    else if (academicLevel === "NEET") {
+        persona = "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons. Frame them exactly like NTA sets them. Use real past exam (PYQ) patterns.";
+    } else if (academicLevel === "JEE Mains") {
+        persona = "Difficulty Standard: JEE Mains. Focus on multi-step application numericals, tricky theoretical twists, and standard analytical problems based on National Testing Agency (NTA) PYQs.";
+    } else if (academicLevel === "JEE Advanced") {
+        persona = "Difficulty Standard: JEE Advanced. Generate highly rigorous, multi-concept integrated problems combining deep analytical physics/math principles. Avoid direct formulas; focus on deep reasoning and complex calculations.";
+    } else if (["SSC", "Banking", "UPSC", "State PCS"].includes(academicLevel)) {
+        persona = `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions based heavily on Previous Year Questions (PYQs). CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities topics.`;
+    } else if (academicLevel === "railway") {
+        persona = "Difficulty Standard: Indian Railway (RRB/NTPC/Group D). Focus heavily on General Science, Static GK, and straightforward mathematical aptitude using real RRB PYQ patterns. Keep language clear, direct, and factual.";
     } else if (academicLevel === "bihar_police") {
-        return "Difficulty Standard: Bihar Police Constable / SI. Focus on State-level GK, basic Indian history, polity, geography, and fundamental science. Questions should test direct factual recall. Do NOT create complex multi-step problems.";
+        persona = "Difficulty Standard: Bihar Police Constable / SI. Focus on State-level GK, basic Indian history, polity, geography, and fundamental science. Questions should test direct factual recall mirroring CSBC PYQs.";
     } else if (academicLevel === "iti") {
-        return "Difficulty Standard: ITI / Polytechnic / Trade Exams. Focus on foundational science, practical measurements, basic mechanical/electrical awareness, and fundamental math. Keep the difficulty easy-to-moderate.";
+        persona = "Difficulty Standard: ITI / Polytechnic / Trade Exams. Focus on foundational science, practical measurements, basic mechanical/electrical awareness, and fundamental math.";
     } else {
-        return "Generate standard, well-structured academic questions testing deep understanding rather than rote memory.";
+        persona = "Generate standard, well-structured academic questions testing deep understanding rather than rote memory.";
     }
+
+    return persona;
 }
 
 const strictNegativeRules = `
-⚠️ STRICT NEGATIVE RULES (DO NOT BREAK THESE):
-1. NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes".
-2. BE REALISTIC: Frame the questions exactly as they appear in a real competitive exam paper.
-3. 🔥 PLAUSIBLE DISTRACTORS (OPTIONS TRICK): Do NOT generate random wrong options. The incorrect options (A, B, C, D) MUST be common student mistakes (e.g., missing a minus sign, half-calculation).
-4. 🧮 MATH FORMATTING (CRITICAL): You MUST use LaTeX formatting enclosed in single '$' symbols for ALL equations, variables, and Greek letters.
+⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
+1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct. Double-check your knowledge, historical facts, and mathematical formulas before generating the options. Do NOT hallucinate.
+2. 📅 DEEP DATA & PYQ INTEGRATION: Ask highly specific questions. Include exact DATES, historical NAMES, critical EVENTS, and exact DATA/FIGURES where relevant. Mimic the exact style of Previous Year Questions (PYQs).
+3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes" or "As seen in the text".
+4. 🔥 PLAUSIBLE DISTRACTORS (OPTIONS TRICK): Do NOT generate random wrong options. The incorrect options (A, B, C, D) MUST be common student mistakes (e.g., missing a minus sign, half-calculation, closely related dates/articles).
+5. 🧮 MATH FORMATTING (CRITICAL): You MUST use LaTeX formatting enclosed in single '$' symbols for ALL equations, variables, and Greek letters.
 🚨 STRICT JSON ESCAPING RULE: If you use a backslash in LaTeX, YOU MUST DOUBLE-ESCAPE IT in the JSON string! Example: Use \\\\eta instead of \\eta. Use \\\\frac instead of \\frac. Use \\\\circ instead of \\circ. If you do not double-escape, the JSON parser will crash!
-5. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO extra text.`;
+6. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO extra text.`;
 
 
 // ==========================================
@@ -193,7 +204,7 @@ app.get('/', (req, res) => {
 });
 
 // ======================================================================= //
-// 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (FIXED & SECURE) 🔥 //
+// 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (UPLOAD NOTES) 🔥 //
 // =======================================================================_
 app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => {
     let userId = req.user.uid;
@@ -202,7 +213,6 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
     try {
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        // AcademicLevel added below
         const { subject, questionCount, academicLevel } = config;
         const qCount = Number(questionCount) || 10;
         requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
@@ -236,8 +246,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                     if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
                 }
 
-                // PLAN LIMIT CHECK
-                let maxAllowedQs = 15; // Default for Free/Starter
+                let maxAllowedQs = 15; 
                 if (userPlan === 'Pro') maxAllowedQs = 25;
                 if (userPlan === 'Elite') maxAllowedQs = 60;
                 if (userPlan === 'Institute') maxAllowedQs = 150;
@@ -251,18 +260,20 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                 finalRemainingCredits = currentCredits - requiredCredits;
                 transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
             });
-            creditsDeducted = true; // Mark that we took credits
+            creditsDeducted = true; 
         }
 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
         
-        // 🔥 NEW DYNAMIC PROMPT 🔥
+        // 🔥 NEW DYNAMIC PROMPT FOR UPLOADED NOTES 🔥
         const prompt = `You are a ruthless and expert academic examiner. Analyze the attached image/file carefully. 
         YOUR TASK: Extract the core TOPICS, FORMULAS, and CONCEPTS from these notes. Then, generate exactly ${qCount} Multiple Choice Questions (MCQs) testing those specific concepts.
         Subject context: "${finalSubject}"
+        
         ${buildExamPersona(academicLevel)}
         ${strictNegativeRules}
-        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
+        
+        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed explanation proving why this is the only correct answer." } ]`;
         
         const parts = [{ text: prompt }];
         let totalSize = 0;
@@ -276,10 +287,8 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        // 🔥 USE MULTI-KEY WRAPPER INSTEAD OF INLINE WHILE-LOOP 🔥
         const response = await generateAIContent(parts);
-        
-const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
         
         // 🔥 SMART JSON PARSER: Auto-fixes common AI backslash mistakes before parsing
         const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
@@ -297,7 +306,7 @@ const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim
     } catch (error) {
         console.error("🚨 Individual Generation Error:", error);
 
-        // 🔥 3. AUTO-REFUND MECHANIC (Agar AI fail hua, toh credits wapas karo!)
+        // AUTO-REFUND MECHANIC
         if (userId !== 'guest_user' && creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -306,7 +315,7 @@ const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim
                     if (userDoc.exists) {
                         let currentCredits = Number(userDoc.data().credits || 0);
                         transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
-                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId} due to generation failure.`);
+                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId}`);
                     }
                 });
             } catch (refundErr) {
@@ -331,10 +340,10 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
     let creditsDeducted = false;
 
     try {
-        const { targetExam, subject, chapter, difficulty, questionCount } = req.body;
+        // 🔥 Now safely extracting Board and Stream from frontend payload
+        const { targetExam, subject, chapter, difficulty, questionCount, board, stream } = req.body;
         const qCount = Number(questionCount) || 10;
         
-        // Slightly cheaper because no image processing is involved!
         requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
         let finalRemainingCredits = "Skipped (Guest)";
 
@@ -342,7 +351,6 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             throw new Error("Custom practice tests are only available for logged-in users.");
         }
 
-        // 1. DEDUCT CREDITS SAFELY & CHECK PLAN LIMITS
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
@@ -354,8 +362,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                     if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
                 }
 
-                // PLAN LIMIT CHECK
-                let maxAllowedQs = 15; // Default
+                let maxAllowedQs = 15; 
                 if (userPlan === 'Pro') maxAllowedQs = 25;
                 if (userPlan === 'Elite') maxAllowedQs = 60;
                 if (userPlan === 'Institute') maxAllowedQs = 150;
@@ -372,29 +379,37 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             creditsDeducted = true;
         }
 
-        // 🔥 PROMPT FOR RTS STYLE GENERATION 🔥
+        // 🔥 PROMPT FOR RTS STYLE GENERATION (HIGH EXAM FIDELITY) 🔥
         const prompt = `You are an elite expert question paper setter for the ${targetExam || 'Competitive'} exam.
         YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", specifically focusing on the chapter/topic "${chapter}".
         Difficulty Level: ${difficulty || 'Medium'}.
         
-        ${buildExamPersona(targetExam)}
+        CRITICAL REQUIREMENT: If the topic involves History, Polity, or GK, strongly focus on specific Dates, Names, Events, and Data. If Science/Math, focus on deep conceptual numericals and theorems. Base the difficulty and format strictly on Previous Year Questions (PYQs) of this specific exam.
+        
+        ${buildExamPersona(targetExam, board, stream)}
         ${strictNegativeRules}
         
-        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
+        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step explanation proving why the answer is mathematically or factually correct." } ]`;
         
         const parts = [{ text: prompt }];
 
         const response = await generateAIContent(parts);
-        
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const quizArray = JSON.parse(cleanText);
+        const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
+        
+        let quizArray;
+        try {
+            quizArray = JSON.parse(safeJsonText);
+        } catch (parseError) {
+            console.error("🚨 Custom Test JSON Parsing Failed:", safeJsonText);
+            throw new Error("AI generated highly complex mathematical equations that caused a formatting glitch. Please hit 'Generate' again to retry.");
+        }
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
     } catch (error) {
         console.error("🚨 Custom Generation Error:", error);
 
-        // AUTO-REFUND MECHANIC
         if (userId !== 'guest_user' && creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -469,7 +484,6 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
 
         const parts = [{ text: prompt }];
         
-        // 🔥 AI CRASH PROTECTION (File Size Limiter)
         let totalSize = 0;
         req.files.forEach(file => { 
             totalSize += file.size;
@@ -480,9 +494,10 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
         }
 
-        // 🔥 USE WRAPPER HERE AS WELL 🔥
         const response = await generateAIContent(parts);
-        const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
+        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
+        const quizArray = JSON.parse(safeJsonText);
 
         const safeName = xss(className).trim();
         const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
