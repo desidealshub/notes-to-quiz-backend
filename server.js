@@ -150,35 +150,36 @@ const verifyAuthToken = async (req, res, next) => {
 app.use('/api/v1/', verifyAuthToken);
 
 // =======================================================================
-// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (UPGRADED FOR EXTREME ACCURACY) 🔥
+// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (WITH BOARD, STREAM & MEDIUM) 🔥
 // =======================================================================
-function buildExamPersona(academicLevel, board = null, stream = null) {
+function buildExamPersona(academicLevel, board = null, stream = null, medium = null) {
     let persona = "";
 
     // 10th & 12th Board Specific Logic
     if (academicLevel === "class10" || academicLevel === "class12") {
         const levelName = academicLevel === "class10" ? "High School (Class 10th)" : "Senior Secondary (Class 12th)";
-        const boardText = board ? ` You are setting an official paper for the ${board}.` : "";
+        const boardText = board ? ` You are setting an official board paper for the ${board}.` : "";
         const streamText = stream ? ` Stream: ${stream}.` : "";
-        persona = `Difficulty Standard: ${levelName}.${boardText}${streamText} Focus on standard board exam formats, previous year questions (PYQs), direct theory applications, and deep conceptual clarity.`;
+        
+        // 🔥 LANGUAGE / MEDIUM INSTRUCTION 🔥
+        let mediumText = "";
+        if (medium === "Hindi") {
+            mediumText = " CRITICAL LANGUAGE RULE: The questions, options (A, B, C, D), and explanations MUST be entirely in PURE HINDI (Devanagari script), matching Bihar Board textbook standards.";
+        } else if (medium === "English") {
+            mediumText = " CRITICAL LANGUAGE RULE: The questions, options, and explanations MUST be entirely in PROFESSIONAL ENGLISH.";
+        }
+
+        persona = `Difficulty Standard: ${levelName}.${boardText}${streamText}${mediumText} Focus on standard board exam formats, previous year questions (PYQs), and conceptual clarity.`;
     } 
-    // Competitive Exams
+    // Competitive Exams (Default to English or Hindi based on standard patterns)
     else if (academicLevel === "NEET") {
-        persona = "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons. Frame them exactly like NTA sets them. Use real past exam (PYQ) patterns.";
-    } else if (academicLevel === "JEE Mains") {
-        persona = "Difficulty Standard: JEE Mains. Focus on multi-step application numericals, tricky theoretical twists, and standard analytical problems based on National Testing Agency (NTA) PYQs.";
-    } else if (academicLevel === "JEE Advanced") {
-        persona = "Difficulty Standard: JEE Advanced. Generate highly rigorous, multi-concept integrated problems combining deep analytical physics/math principles. Avoid direct formulas; focus on deep reasoning and complex calculations.";
-    } else if (["SSC", "Banking", "UPSC", "State PCS"].includes(academicLevel)) {
-        persona = `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions based heavily on Previous Year Questions (PYQs). CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities topics.`;
-    } else if (academicLevel === "railway") {
-        persona = "Difficulty Standard: Indian Railway (RRB/NTPC/Group D). Focus heavily on General Science, Static GK, and straightforward mathematical aptitude using real RRB PYQ patterns. Keep language clear, direct, and factual.";
-    } else if (academicLevel === "bihar_police") {
-        persona = "Difficulty Standard: Bihar Police Constable / SI. Focus on State-level GK, basic Indian history, polity, geography, and fundamental science. Questions should test direct factual recall mirroring CSBC PYQs.";
-    } else if (academicLevel === "iti") {
-        persona = "Difficulty Standard: ITI / Polytechnic / Trade Exams. Focus on foundational science, practical measurements, basic mechanical/electrical awareness, and fundamental math.";
+        persona = "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons mirroring NTA sets.";
+    } else if (academicLevel === "JEE Mains" || academicLevel === "JEE Advanced") {
+        persona = `Difficulty Standard: ${academicLevel}. Focus on multi-step application numericals and complex analytical problems based on NTA PYQs.`;
+    } else if (["SSC", "Banking", "UPSC", "State PCS", "railway", "bihar_police", "iti"].includes(academicLevel)) {
+        persona = `Difficulty Standard: ${academicLevel}. Generate official exam-level questions with realistic, confusing distractors mirroring official PYQs.`;
     } else {
-        persona = "Generate standard, well-structured academic questions testing deep understanding rather than rote memory.";
+        persona = "Generate standard, well-structured academic questions testing deep understanding.";
     }
 
     return persona;
@@ -341,7 +342,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
     try {
         // 🔥 Now safely extracting Board and Stream from frontend payload
-        const { targetExam, subject, chapter, difficulty, questionCount, board, stream } = req.body;
+        const { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
         const qCount = Number(questionCount) || 10;
         
         requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
@@ -386,7 +387,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         
         CRITICAL REQUIREMENT: If the topic involves History, Polity, or GK, strongly focus on specific Dates, Names, Events, and Data. If Science/Math, focus on deep conceptual numericals and theorems. Base the difficulty and format strictly on Previous Year Questions (PYQs) of this specific exam.
         
-        ${buildExamPersona(targetExam, board, stream)}
+        ${buildExamPersona(targetExam, board, stream, medium)}
         ${strictNegativeRules}
         
         Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step explanation proving why the answer is mathematically or factually correct." } ]`;
