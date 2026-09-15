@@ -91,10 +91,41 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_SECRET || 'dummysecret'
 });
 
-// GEMINI AI SDK SETUP
+// 🔥 GEMINI AI SDK SETUP (MULTI-KEY FALLBACK ADDED HERE) 🔥
 const { GoogleGenAI } = require('@google/genai');
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
+const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
+const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
+let currentClientIndex = 0;
 
+// Master AI Generation Function (Replaces manual while-loop in routes)
+async function generateAIContent(parts) {
+    let attempts = 0;
+    const maxRetries = 3;
+    let lastError;
+
+    while (attempts < maxRetries) {
+        try {
+            const ai = aiClients[currentClientIndex];
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash', 
+                contents: parts
+            });
+            return response;
+        } catch (err) {
+            lastError = err;
+            console.warn(`⚠️ Gemini Key ${currentClientIndex + 1} failed (Status: ${err.status || 'Unknown'}). Retrying...`);
+            // Switch key on Quota or Server Down errors
+            if (err.status === 429 || err.status === 503) {
+                currentClientIndex = (currentClientIndex + 1) % aiClients.length;
+                console.log(`🔄 Switched to Backup API Key ${currentClientIndex + 1}`);
+            }
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, attempts * 2000));
+        }
+    }
+    throw lastError; // Agar saari keys aur retries fail ho jaye
+}
 
 // ==========================================
 // --- AUTHENTICATION MIDDLEWARE ---
@@ -118,6 +149,30 @@ const verifyAuthToken = async (req, res, next) => {
 };
 app.use('/api/v1/', verifyAuthToken);
 
+// =======================================================================
+// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (NEW) 🔥
+// =======================================================================
+function buildExamPersona(academicLevel) {
+    if (academicLevel === "NEET") {
+        return "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons. Frame them exactly like NTA sets them.";
+    } else if (academicLevel === "JEE Mains") {
+        return "Difficulty Standard: JEE Mains. Focus on multi-step application numericals, tricky theoretical twists, and standard analytical problems.";
+    } else if (academicLevel === "JEE Advanced") {
+        return "Difficulty Standard: JEE Advanced. Generate highly rigorous, multi-concept integrated problems combining deep analytical physics/math principles. Avoid direct formulas; focus on deep reasoning and complex calculations.";
+    } else if (["SSC", "Banking", "UPSC", "State PCS", "Government"].includes(academicLevel)) {
+        return `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions. CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities/GK topics.`;
+    } else {
+        return "Generate standard, well-structured academic questions testing deep understanding rather than rote memory.";
+    }
+}
+
+const strictNegativeRules = `
+⚠️ STRICT NEGATIVE RULES (DO NOT BREAK THESE):
+1. NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes", "In the image", "As mentioned at the top", or "What is written in...". 
+2. BE REALISTIC: Frame the questions exactly as they appear in a real competitive exam paper.
+3. 🔥 PLAUSIBLE DISTRACTORS (OPTIONS TRICK): Do NOT generate random wrong options. The incorrect options (A, B, C, D) MUST be common student mistakes (e.g., missing a minus sign, half-calculation, closely related dates/articles). The options should look highly confusing and require precise knowledge to eliminate.
+4. WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), or newlines (\\n) INSIDE the JSON values. Keep all text plain and raw.`;
+
 
 // ==========================================
 // --- API ROUTES ---
@@ -137,7 +192,8 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
     try {
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        const { subject, questionCount } = config;
+        // AcademicLevel added below
+        const { subject, questionCount, academicLevel } = config;
         const qCount = Number(questionCount) || 10;
         requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
@@ -158,16 +214,30 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             });
         }
 
-        // 1. DEDUCT CREDITS SAFELY BEFORE AI CALL
+        // 1. DEDUCT CREDITS SAFELY & CHECK PLAN LIMITS
         if (userId !== 'guest_user') {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
                 const userDoc = await transaction.get(userRef);
                 let currentCredits = 30;
-                if (userDoc.exists && userDoc.data().credits !== undefined) {
-                    currentCredits = Number(userDoc.data().credits);
+                let userPlan = 'Free';
+                if (userDoc.exists) {
+                    if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
+                    if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
                 }
+
+                // PLAN LIMIT CHECK
+                let maxAllowedQs = 15; // Default for Free/Starter
+                if (userPlan === 'Pro') maxAllowedQs = 25;
+                if (userPlan === 'Elite') maxAllowedQs = 60;
+                if (userPlan === 'Institute') maxAllowedQs = 150;
+
+                if (qCount > maxAllowedQs) {
+                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade to unlock more.`);
+                }
+
                 if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
+                
                 finalRemainingCredits = currentCredits - requiredCredits;
                 transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
             });
@@ -175,7 +245,14 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         }
 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
-        const prompt = `You are an expert academic examiner. Analyze the attached image/file carefully. Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on the visible content. Subject context: "${finalSubject}" WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), italics, or newlines (\n) INSIDE the JSON values. Keep all text plain and raw. Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
+        
+        // 🔥 NEW DYNAMIC PROMPT 🔥
+        const prompt = `You are a ruthless and expert academic examiner. Analyze the attached image/file carefully. 
+        YOUR TASK: Extract the core TOPICS, FORMULAS, and CONCEPTS from these notes. Then, generate exactly ${qCount} Multiple Choice Questions (MCQs) testing those specific concepts.
+        Subject context: "${finalSubject}"
+        ${buildExamPersona(academicLevel)}
+        ${strictNegativeRules}
+        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
         
         const parts = [{ text: prompt }];
         let totalSize = 0;
@@ -189,26 +266,9 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        // 🔥 2. RETRY LOGIC FOR GEMINI 503 OVERLOAD 🔥
-        let response;
-        let attempts = 0;
-        const maxRetries = 3;
-
-        while (attempts < maxRetries) {
-            try {
-                attempts++;
-                response = await ai.models.generateContent({
-                    model: 'gemini-3.6-flash', // Note: Using stable model version to prevent 503 spikes
-                    contents: parts
-                });
-                break; // Agar success ho gaya toh loop se bahar aa jao
-            } catch (aiErr) {
-                console.warn(`⚠️ Gemini attempt ${attempts} failed (Status: ${aiErr.status || 'Unknown'}). Retrying...`);
-                if (attempts >= maxRetries) throw aiErr; // Agar 3 baar fail hua toh final throw karo
-                await new Promise(resolve => setTimeout(resolve, attempts * 2000)); // Wait 2s, 4s before retry
-            }
-        }
-
+        // 🔥 USE MULTI-KEY WRAPPER INSTEAD OF INLINE WHILE-LOOP 🔥
+        const response = await generateAIContent(parts);
+        
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
         const quizArray = JSON.parse(cleanText);
 
@@ -236,10 +296,108 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
         res.status(500).json({ 
             success: false, 
-            error: "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
+            error: error.message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
         });
     }
 });
+
+
+// ======================================================================= //
+// 🔥 1.B CUSTOM TEST GENERATION (NO UPLOADS - RTS STYLE) 🔥 //
+// =======================================================================_
+app.post('/api/v1/generate-custom-test', async (req, res) => {
+    let userId = req.user.uid;
+    let requiredCredits = 0;
+    let creditsDeducted = false;
+
+    try {
+        const { targetExam, subject, chapter, difficulty, questionCount } = req.body;
+        const qCount = Number(questionCount) || 10;
+        
+        // Slightly cheaper because no image processing is involved!
+        requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
+        let finalRemainingCredits = "Skipped (Guest)";
+
+        if (userId === 'guest_user') {
+            throw new Error("Custom practice tests are only available for logged-in users.");
+        }
+
+        // 1. DEDUCT CREDITS SAFELY & CHECK PLAN LIMITS
+        if (userId !== 'guest_user') {
+            const userRef = db.collection('users').doc(userId);
+            await db.runTransaction(async (transaction) => {
+                const userDoc = await transaction.get(userRef);
+                let currentCredits = 30;
+                let userPlan = 'Free';
+                if (userDoc.exists) {
+                    if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
+                    if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
+                }
+
+                // PLAN LIMIT CHECK
+                let maxAllowedQs = 15; // Default
+                if (userPlan === 'Pro') maxAllowedQs = 25;
+                if (userPlan === 'Elite') maxAllowedQs = 60;
+                if (userPlan === 'Institute') maxAllowedQs = 150;
+
+                if (qCount > maxAllowedQs) {
+                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade to unlock more.`);
+                }
+
+                if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
+                
+                finalRemainingCredits = currentCredits - requiredCredits;
+                transaction.set(userRef, { credits: finalRemainingCredits }, { merge: true });
+            });
+            creditsDeducted = true;
+        }
+
+        // 🔥 PROMPT FOR RTS STYLE GENERATION 🔥
+        const prompt = `You are an elite expert question paper setter for the ${targetExam || 'Competitive'} exam.
+        YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", specifically focusing on the chapter/topic "${chapter}".
+        Difficulty Level: ${difficulty || 'Medium'}.
+        
+        ${buildExamPersona(targetExam)}
+        ${strictNegativeRules}
+        
+        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Explanation" } ]`;
+        
+        const parts = [{ text: prompt }];
+
+        const response = await generateAIContent(parts);
+        
+        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const quizArray = JSON.parse(cleanText);
+
+        res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
+
+    } catch (error) {
+        console.error("🚨 Custom Generation Error:", error);
+
+        // AUTO-REFUND MECHANIC
+        if (userId !== 'guest_user' && creditsDeducted) {
+            try {
+                const userRef = db.collection('users').doc(userId);
+                await db.runTransaction(async (transaction) => {
+                    const userDoc = await transaction.get(userRef);
+                    if (userDoc.exists) {
+                        let currentCredits = Number(userDoc.data().credits || 0);
+                        transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
+                    }
+                });
+            } catch (refundErr) {
+                console.error("🚨 Refund Transaction Failed:", refundErr);
+            }
+        }
+
+        res.status(500).json({ 
+            success: false, 
+            error: error.message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
+        });
+    }
+});
+
+
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
 // =======================================================================
@@ -285,7 +443,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         } else {
             prompt = `You are an expert academic examiner. Analyze the attached study notes/files. 
             Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on this content. 
-            WARNING: DO NOT use markdown formatting inside JSON.
+            ${strictNegativeRules}
             Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
         }
 
@@ -302,7 +460,8 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
         }
 
-        const response = await ai.models.generateContent({ model: 'gemini-3.6-flash', contents: parts });
+        // 🔥 USE WRAPPER HERE AS WELL 🔥
+        const response = await generateAIContent(parts);
         const quizArray = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
 
         const safeName = xss(className).trim();
@@ -526,7 +685,7 @@ app.post('/api/v1/create-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 8. RAZORPAY PAYMENT VERIFICATION & CREDIT UPDATE 🔥
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION & PLAN UPGRADE 🔥
 // =======================================================================
 app.post('/api/v1/verify-payment', async (req, res) => {
     try {
@@ -542,18 +701,28 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
+        // 🔥 DYNAMIC PLAN UPGRADE MAPPING 🔥
+        let upgradedPlan = 'Starter';
+        const added = Number(creditsToAdd);
+        if (added >= 300 && added < 750) upgradedPlan = 'Pro';
+        else if (added >= 750 && added < 2000) upgradedPlan = 'Elite';
+        else if (added >= 2000) upgradedPlan = 'Institute';
+
         const userRef = db.collection('users').doc(req.user.uid);
         await db.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             let currentCredits = 0;
-            if (userDoc.exists && userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
+            if (userDoc.exists && userDoc.data().credits !== undefined) {
+                currentCredits = Number(userDoc.data().credits);
+            }
             
             transaction.set(userRef, { 
-                credits: currentCredits + Number(creditsToAdd) 
+                credits: currentCredits + added,
+                plan: upgradedPlan // 🔥 Saves the new plan to DB
             }, { merge: true });
         });
 
-        res.status(200).json({ success: true, message: "Payment verified successfully." });
+        res.status(200).json({ success: true, message: `Payment verified. Upgraded to ${upgradedPlan} Plan!` });
     } catch (error) {
         console.error("Payment Verification Error:", error);
         res.status(500).json({ success: false, error: "Failed to verify payment." });
