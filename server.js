@@ -159,8 +159,16 @@ function buildExamPersona(academicLevel) {
         return "Difficulty Standard: JEE Mains. Focus on multi-step application numericals, tricky theoretical twists, and standard analytical problems.";
     } else if (academicLevel === "JEE Advanced") {
         return "Difficulty Standard: JEE Advanced. Generate highly rigorous, multi-concept integrated problems combining deep analytical physics/math principles. Avoid direct formulas; focus on deep reasoning and complex calculations.";
-    } else if (["SSC", "Banking", "UPSC", "State PCS", "Government"].includes(academicLevel)) {
-        return `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions. CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities/GK topics.`;
+    } else if (["SSC", "Banking", "UPSC", "State PCS"].includes(academicLevel)) {
+        return `Difficulty Standard: ${academicLevel}. Generate factual, analytical, and logical reasoning questions. CRITICAL RULE FOR GOVT EXAMS: Options MUST be highly confusing. For dates, use very close nearby dates (e.g., 1919 vs 1920). For polity, use nearby Articles. Make the distractors brutally realistic. DO NOT force math numericals on humanities topics.`;
+    } 
+    // 🔥 NEW LOCAL/GOVT EXAMS ADDED HERE 🔥
+    else if (academicLevel === "railway") {
+        return "Difficulty Standard: Indian Railway (RRB/NTPC/Group D). Focus heavily on General Science (basic Physics, Chemistry, Biology), Static GK, and straightforward mathematical aptitude. Keep language clear, direct, and factual.";
+    } else if (academicLevel === "bihar_police") {
+        return "Difficulty Standard: Bihar Police Constable / SI. Focus on State-level GK, basic Indian history, polity, geography, and fundamental science. Questions should test direct factual recall. Do NOT create complex multi-step problems.";
+    } else if (academicLevel === "iti") {
+        return "Difficulty Standard: ITI / Polytechnic / Trade Exams. Focus on foundational science, practical measurements, basic mechanical/electrical awareness, and fundamental math. Keep the difficulty easy-to-moderate.";
     } else {
         return "Generate standard, well-structured academic questions testing deep understanding rather than rote memory.";
     }
