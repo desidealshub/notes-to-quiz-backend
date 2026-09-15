@@ -176,11 +176,11 @@ function buildExamPersona(academicLevel) {
 
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES (DO NOT BREAK THESE):
-1. NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes", "In the image", "As mentioned at the top", or "What is written in...". 
+1. NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes".
 2. BE REALISTIC: Frame the questions exactly as they appear in a real competitive exam paper.
-3. 🔥 PLAUSIBLE DISTRACTORS (OPTIONS TRICK): Do NOT generate random wrong options. The incorrect options (A, B, C, D) MUST be common student mistakes (e.g., missing a minus sign, half-calculation, closely related dates/articles). The options should look highly confusing and require precise knowledge to eliminate.
-4. WARNING: DO NOT use any markdown formatting, asterisks (*), bold (**), or newlines (\\n) INSIDE the JSON values. Keep all text plain and raw.`;
-
+3. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student calculation mistakes.
+4. 🧮 MATH FORMATTING (CRITICAL): You MUST use LaTeX formatting enclosed in single '$' symbols for ALL equations, variables, powers, subscripts, and Greek letters. Example: Use $\eta$ instead of eta, use $V^{\gamma - 1}$ instead of V^(gamma-1), use $300^\circ C$, use $E = mc^2$.
+5. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO extra text. Keep raw strings inside JSON values.`;
 
 // ==========================================
 // --- API ROUTES ---
