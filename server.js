@@ -178,9 +178,11 @@ const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES (DO NOT BREAK THESE):
 1. NO META-QUESTIONS: NEVER reference the notes themselves. Do NOT use phrases like "According to the notes".
 2. BE REALISTIC: Frame the questions exactly as they appear in a real competitive exam paper.
-3. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student calculation mistakes.
-4. 🧮 MATH FORMATTING (CRITICAL): You MUST use LaTeX formatting enclosed in single '$' symbols for ALL equations, variables, powers, subscripts, and Greek letters. Example: Use $\eta$ instead of eta, use $V^{\gamma - 1}$ instead of V^(gamma-1), use $300^\circ C$, use $E = mc^2$.
-5. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO extra text. Keep raw strings inside JSON values.`;
+3. 🔥 PLAUSIBLE DISTRACTORS (OPTIONS TRICK): Do NOT generate random wrong options. The incorrect options (A, B, C, D) MUST be common student mistakes (e.g., missing a minus sign, half-calculation).
+4. 🧮 MATH FORMATTING (CRITICAL): You MUST use LaTeX formatting enclosed in single '$' symbols for ALL equations, variables, and Greek letters.
+🚨 STRICT JSON ESCAPING RULE: If you use a backslash in LaTeX, YOU MUST DOUBLE-ESCAPE IT in the JSON string! Example: Use \\\\eta instead of \\eta. Use \\\\frac instead of \\frac. Use \\\\circ instead of \\circ. If you do not double-escape, the JSON parser will crash!
+5. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO extra text.`;
+
 
 // ==========================================
 // --- API ROUTES ---
@@ -277,8 +279,18 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         // 🔥 USE MULTI-KEY WRAPPER INSTEAD OF INLINE WHILE-LOOP 🔥
         const response = await generateAIContent(parts);
         
-        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const quizArray = JSON.parse(cleanText);
+const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        // 🔥 SMART JSON PARSER: Auto-fixes common AI backslash mistakes before parsing
+        const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
+        
+        let quizArray;
+        try {
+            quizArray = JSON.parse(safeJsonText);
+        } catch (parseError) {
+            console.error("🚨 JSON Parsing Failed. AI Response was:", safeJsonText);
+            throw new Error("AI generated highly complex mathematical equations that caused a formatting glitch. Please hit 'Generate' again to retry.");
+        }
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
