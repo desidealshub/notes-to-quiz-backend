@@ -108,7 +108,7 @@ async function generateAIContent(parts) {
         try {
             const ai = aiClients[currentClientIndex];
             const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash', 
+                model: 'gemini-3.6-flash', 
                 contents: parts
             });
             return response;
