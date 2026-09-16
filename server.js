@@ -150,9 +150,9 @@ const verifyAuthToken = async (req, res, next) => {
 app.use('/api/v1/', verifyAuthToken);
 
 // =======================================================================
-// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (WITH BOARD, STREAM & MEDIUM) 🔥
+// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (WITH BOARD, STREAM, MEDIUM & SUBJECT BYPASS) 🔥
 // =======================================================================
-function buildExamPersona(academicLevel, board = null, stream = null, medium = null) {
+function buildExamPersona(academicLevel, board = null, stream = null, medium = null, subject = null) {
     let persona = "";
 
     // 10th & 12th Board Specific Logic
@@ -161,9 +161,13 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
         const boardText = board ? ` You are setting an official board paper for the ${board}.` : "";
         const streamText = stream ? ` Stream: ${stream}.` : "";
         
-        // 🔥 LANGUAGE / MEDIUM INSTRUCTION 🔥
+        // 🔥 LANGUAGE / MEDIUM INSTRUCTION (WITH ENGLISH BYPASS) 🔥
         let mediumText = "";
-        if (medium === "Hindi") {
+        const isEnglishSubject = subject && subject.toLowerCase().includes("english");
+
+        if (isEnglishSubject) {
+            mediumText = " CRITICAL LANGUAGE RULE: Since this is an English language subject, the questions, options, and explanations MUST be entirely in PROFESSIONAL ENGLISH, regardless of the student's background medium.";
+        } else if (medium === "Hindi") {
             mediumText = " CRITICAL LANGUAGE RULE: The questions, options (A, B, C, D), and explanations MUST be entirely in PURE HINDI (Devanagari script), matching Bihar Board textbook standards.";
         } else if (medium === "English") {
             mediumText = " CRITICAL LANGUAGE RULE: The questions, options, and explanations MUST be entirely in PROFESSIONAL ENGLISH.";
@@ -271,7 +275,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         YOUR TASK: Extract the core TOPICS, FORMULAS, and CONCEPTS from these notes. Then, generate exactly ${qCount} Multiple Choice Questions (MCQs) testing those specific concepts.
         Subject context: "${finalSubject}"
         
-        ${buildExamPersona(academicLevel)}
+        ${buildExamPersona(academicLevel, null, null, null, finalSubject)}
         ${strictNegativeRules}
         
         Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed explanation proving why this is the only correct answer." } ]`;
@@ -387,7 +391,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         
         CRITICAL REQUIREMENT: If the topic involves History, Polity, or GK, strongly focus on specific Dates, Names, Events, and Data. If Science/Math, focus on deep conceptual numericals and theorems. Base the difficulty and format strictly on Previous Year Questions (PYQs) of this specific exam.
         
-        ${buildExamPersona(targetExam, board, stream, medium)}
+        ${buildExamPersona(targetExam, board, stream, medium, subject)}
         ${strictNegativeRules}
         
         Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step explanation proving why the answer is mathematically or factually correct." } ]`;
