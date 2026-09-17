@@ -98,7 +98,7 @@ const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
 const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
 let currentClientIndex = 0;
 
-// Master AI Generation Function (Replaces manual while-loop in routes)
+// Master AI Generation Function (With Strict JSON Mode)
 async function generateAIContent(parts) {
     let attempts = 0;
     const maxRetries = 3;
@@ -108,8 +108,11 @@ async function generateAIContent(parts) {
         try {
             const ai = aiClients[currentClientIndex];
             const response = await ai.models.generateContent({
-                model: 'gemini-3.6-flash', // Using latest stable model for best accuracy
-                contents: parts
+                model: 'gemini-1.5-flash', // 🔥 Fixed Model Name (Use stable 1.5-flash)
+                contents: parts,
+                config: {
+                    responseMimeType: "application/json" // 🔥 THE GOD-TIER FIX: Mathematically guarantees valid JSON!
+                }
             });
             return response;
         } catch (err) {
