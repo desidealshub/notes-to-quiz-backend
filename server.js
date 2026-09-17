@@ -385,7 +385,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        res.status(500).json({ success: false, error: error.Message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
+        res.status(500).json({ success: false, error: error.message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
         });
     }
 });
