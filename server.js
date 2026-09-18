@@ -98,8 +98,8 @@ const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
 const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
 let currentClientIndex = 0;
 
-// Master AI Generation Function (With Strict JSON Mode)
-async function generateAIContent(parts) {
+// Master AI Generation Function (Now Smart & Flexible)
+async function generateAIContent(parts, isJsonMode = false) {
     let attempts = 0;
     const maxRetries = 3;
     let lastError;
@@ -107,18 +107,24 @@ async function generateAIContent(parts) {
     while (attempts < maxRetries) {
         try {
             const ai = aiClients[currentClientIndex];
+            
+            // Setting config dynamically based on what the route needs
+            const configParams = {};
+            if (isJsonMode) {
+                configParams.responseMimeType = "application/json";
+            }
+
             const response = await ai.models.generateContent({
-                model: 'gemini-3.6-flash', // 🔥 Fixed Model Name (Use stable 3.6-flash)
+                model: 'gemini-3.6-flash',
                 contents: parts,
-                config: {
-                    responseMimeType: "application/json" // 🔥 THE GOD-TIER FIX: Mathematically guarantees valid JSON!
-                }
+                config: configParams
             });
+            
             return response;
         } catch (err) {
             lastError = err;
             console.warn(`⚠️ Gemini Key ${currentClientIndex + 1} failed (Status: ${err.status || 'Unknown'}). Retrying...`);
-            // Switch key on Quota or Server Down errors
+            
             if (err.status === 429 || err.status === 503) {
                 currentClientIndex = (currentClientIndex + 1) % aiClients.length;
                 console.log(`🔄 Switched to Backup API Key ${currentClientIndex + 1}`);
@@ -127,7 +133,7 @@ async function generateAIContent(parts) {
             await new Promise(resolve => setTimeout(resolve, attempts * 2000));
         }
     }
-    throw lastError; // Agar saari keys aur retries fail ho jaye
+    throw lastError;
 }
 
 // ==========================================
@@ -254,7 +260,7 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
         
         YOUR TASK: Explain the concept step-by-step in a very simple, easy-to-understand tone. Use Hinglish if the doubt feels casual. Keep it encouraging. Max 4-5 short paragraphs. DO NOT use markdown code blocks, just plain text with basic bolding.`;
         
-        const response = await generateAIContent([{ text: prompt }]);
+        const response = await generateAIContent([{ text: prompt }], false);
         res.status(200).json({ success: true, answer: response.text });
     } catch (error) {
         console.error("Chat Tutor Error:", error);
@@ -353,7 +359,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        const response = await generateAIContent(parts);
+        const response = await generateAIContent(parts, true);
         
         // 🔥 SOLUTION: APPLYING THE SAFE JSON PARSER
         const quizArray = safeJSONParse(response.text);
@@ -456,7 +462,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         
         const parts = [{ text: prompt }];
 
-        const response = await generateAIContent(parts);
+        const response = await generateAIContent(parts, true);
      // 🔥 SOLUTION: APPLYING THE SAFE JSON PARSER
         const quizArray = safeJSONParse(response.text);
 
@@ -549,7 +555,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
         }
 
-        const response = await generateAIContent(parts);
+        const response = await generateAIContent(parts, true);
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
         const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
         const quizArray = JSON.parse(safeJsonText);
