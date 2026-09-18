@@ -108,7 +108,7 @@ async function generateAIContent(parts) {
         try {
             const ai = aiClients[currentClientIndex];
             const response = await ai.models.generateContent({
-                model: 'gemini-1.5-flash', // 🔥 Fixed Model Name (Use stable 1.5-flash)
+                model: 'gemini-3.6-flash', // 🔥 Fixed Model Name (Use stable 3.6-flash)
                 contents: parts,
                 config: {
                     responseMimeType: "application/json" // 🔥 THE GOD-TIER FIX: Mathematically guarantees valid JSON!
