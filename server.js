@@ -205,9 +205,12 @@ const strictNegativeRules = `
 2. 📅 DEEP DATA & PYQ INTEGRATION: Ask highly specific questions mirroring official exams.
 3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves (e.g., "According to the notes").
 4. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student mistakes.
-5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): You MUST use LaTeX enclosed in single '$' for ALL equations. 
+5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): You MUST use LaTeX enclosed in single '$' for ALL equations, variables, and formulas. 
+🚨 CRITICAL EXPLANATION RULE: You MUST wrap every single mathematical term in the 'explanation' field with '$' signs. Never write raw LaTeX (like \\frac) without '$'. Avoid using apostrophes/single quotes in math (use ^\\prime instead).
 🚨 STRICT JSON ESCAPING RULE: You MUST DOUBLE-ESCAPE all backslashes in LaTeX! Example: Use \\\\frac instead of \\frac. Use \\\\alpha instead of \\alpha. If you do not double-escape, the JSON parser WILL CRASH.
-6. ⚡ SPEED RULE: Keep the 'explanation' field EXTREMELY concise. Maximum 2 sentences. Get straight to the formula or core concept.
+6. ⚡ SPEED & UX RULE (SHORT OPTIONS & EXPLANATIONS): 
+   - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
+   - Keep the 'explanation' field EXTREMELY concise. Maximum 2 sentences. Get straight to the formula or core concept.
 7. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json.`;
 
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
