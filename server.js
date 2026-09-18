@@ -457,16 +457,8 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         const parts = [{ text: prompt }];
 
         const response = await generateAIContent(parts);
-        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
-        
-        let quizArray;
-        try {
-            quizArray = JSON.parse(safeJsonText);
-        } catch (parseError) {
-            console.error("🚨 Custom Test JSON Parsing Failed:", safeJsonText);
-            throw new Error("AI generated highly complex mathematical equations that caused a formatting glitch. Please hit 'Generate' again to retry.");
-        }
+     // 🔥 SOLUTION: APPLYING THE SAFE JSON PARSER
+        const quizArray = safeJSONParse(response.text);
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
