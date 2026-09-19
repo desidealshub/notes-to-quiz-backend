@@ -158,60 +158,61 @@ verifyAuthToken = async (req, res, next) => {
 app.use('/api/v1/', verifyAuthToken);
 
 // =======================================================================
-// 🔥 UNIVERSAL PROMPT ENGINEERING (WITH ULTRA-HARDCORE DIFFICULTY INJECTOR) 🔥
+// 🔥 UNIVERSAL PROMPT ENGINEERING (EXAM & SUBJECT SPECIFIC ARCHETYPES) 🔥
 // =======================================================================
 function buildExamPersona(academicLevel, board = null, stream = null, medium = null, subject = null, difficulty = 'medium') {
-    let persona = "";
+    let examStyle = "";
+    const target = academicLevel ? academicLevel.toLowerCase() : "";
+    const sub = subject ? subject.toLowerCase() : "";
+
+    // 🚨 1. EXAM & SUBJECT SPECIFIC TONE 🚨
+    if (target === 'jee_adv') {
+        examStyle = `🚨 JEE ADVANCED MODE: Generate highly complex, multi-layered comprehension-style paragraphs. For ${subject}, intertwine 2-3 distinct advanced chapters. Force the student to solve for hidden variables before the main calculation. Options should be abstract expressions. Requires rigorous mathematical steps.`;
+    } else if (target === 'jee_mains') {
+        examStyle = `🚨 JEE MAINS MODE: Generate tricky, speed-breaker numericals mirroring NTA 2024 patterns. For ${subject}, focus on calculation traps, edge cases in formulas, and algebraic manipulations.`;
+    } else if (target === 'neet') {
+        if (sub.includes('physics')) {
+            examStyle = `🚨 NEET PHYSICS MODE: Focus on formula application, conceptual tricks, and speed. Avoid lengthy calculus. Use assertion-reasoning or statement-based questions.`;
+        } else if (sub.includes('biology') || sub.includes('botany') || sub.includes('zoology')) {
+            examStyle = `🚨 NEET BIOLOGY MODE: Focus on deep NCERT line-by-line factual recall, matching lists, and assertion-reasoning.`;
+        } else {
+            examStyle = `🚨 NEET MODE: Focus on speed, factual accuracy, and direct conceptual application mirroring NTA NEET patterns.`;
+        }
+    } else if (target === 'ssc' || target === 'banking' || target === 'railway' || target === 'bihar_police') {
+        if (sub.includes('math') || sub.includes('aptitude') || sub.includes('quant')) {
+            examStyle = `🚨 COMPETITIVE QUANT MODE: Focus on arithmetic shortcuts, percentages, time-speed-distance, and geometry tricks. Use tricky distractors that match common calculation errors.`;
+        } else if (sub.includes('reasoning') || sub.includes('intelligence')) {
+            examStyle = `🚨 REASONING MODE: Focus on deep logical puzzles, syllogisms, and coding-decoding.`;
+        } else if (sub.includes('english')) {
+            examStyle = `🚨 ENGLISH COMPREHENSION MODE: Focus on complex spotting errors, idioms, and vocabulary.`;
+        } else {
+            examStyle = `🚨 GK/AWARENESS MODE: Focus on exact dates, articles of the constitution, recent events, or specific historical facts.`;
+        }
+    } else if (target === 'class12' || target === 'class10') {
+        examStyle = `🚨 BOARD EXAM MODE (${board || 'CBSE'}): Mirror the exact pattern of board exams. Use case-study based questions, assertion-reasoning, and standard conceptual proofs.`;
+    } else {
+        examStyle = `🚨 COMPETITIVE MODE: Adapt strictly to the ${academicLevel} standard for ${subject}.`;
+    }
+
+    // 🚨 2. DIFFICULTY SCALING 🚨
     let diffRules = "";
-    const isMathOrScience = subject && (subject.toLowerCase().includes("math") || subject.toLowerCase().includes("physics") || subject.toLowerCase().includes("chemistry"));
-
-    // 🚨 1. THE DIFFICULTY ENGINE (THE GAME CHANGER) 🚨
     if (difficulty.toLowerCase() === 'hard') {
-        diffRules = `🔥 EXTREME DIFFICULTY MODE ACTIVE: 
-        - DO NOT ask any single-step or direct formula-based questions. 
-        - For Math/Science, you MUST intertwine 2 to 3 distinct concepts in a single question (e.g., mix Matrices with Integration, or Probability with Complex Numbers).
-        - Calculations MUST be rigorous, lengthy, and require high analytical thinking.
-        - The distractors (incorrect options) MUST represent common student calculation errors or conceptual traps. 
-        - If an average 11th-grade student can solve this easily, YOU HAVE FAILED YOUR TASK. Make them sweat.`;
+        diffRules = `🔥 DIFFICULTY: HARD. DO NOT ask single-step or direct formula questions. Make the scenario complex. Mix multiple concepts. Hide direct data and make the student derive it first.`;
     } else if (difficulty.toLowerCase() === 'easy') {
-        diffRules = "Difficulty Standard: Easy (NCERT Level). Focus on direct definitions, basic formulas, and fundamental understanding.";
+        diffRules = `Difficulty: Easy. Focus on fundamental concepts, direct definitions, and basic formula applications.`;
     } else {
-        diffRules = "Difficulty Standard: Medium (Mains Level). Focus on standard application of concepts, moderate calculations, and typical previous year board/Mains questions.";
+        diffRules = `Difficulty: Medium. Standard previous year question level with moderate calculations.`;
     }
 
-    // 🚨 2. EXAM TARGET LOGIC 🚨
-    if (academicLevel === "class10" || academicLevel === "class12") {
-        const levelName = academicLevel === "class10" ? "High School (Class 10th)" : "Senior Secondary (Class 12th)";
-        const boardText = board ? ` You are setting an official board paper for the ${board}.` : "";
-        const streamText = stream ? ` Stream: ${stream}.` : "";
-        persona = `Target: ${levelName}.${boardText}${streamText} ${diffRules}`;
-    } 
-    else if (academicLevel === "neet") {
-        persona = `Target: NEET UG. ${diffRules} Incorporate tricky Assertion-Reasoning, Statement 1/2, and match-the-following types mirroring NTA's toughest sets.`;
-    } 
-    else if (academicLevel === "jee_mains") {
-        persona = `Target: JEE Mains. ${diffRules} Focus on speed-breaker numericals and logical traps based on recent NTA shifts.`;
-    } 
-    else if (academicLevel === "jee_adv") {
-        // OVERRIDE FOR ADVANCED: Hamesha hardcore rahega
-        persona = `Target: JEE Advanced. 🚨 ABSOLUTE MAXIMUM DIFFICULTY 🚨. Do not ask NCERT level questions. Every question MUST involve heavy multi-concept integration (e.g., Coordinate Geometry + Calculus). Use multiple edge cases. Options should look similar to confuse the student.`;
-    } 
-    else if (["SSC", "Banking", "UPSC", "State PCS", "railway", "bihar_police", "iti"].includes(academicLevel)) {
-        persona = `Target: ${academicLevel}. ${diffRules} Generate highly confusing logical distractors similar to official tier-1/tier-2 exam levels.`;
-    } else {
-        persona = `Target: Academic Assessment. ${diffRules}`;
-    }
-
-    // 🚨 3. LANGUAGE / MEDIUM INSTRUCTION 🚨
-    const isEnglishSubject = subject && subject.toLowerCase().includes("english");
+    // 🚨 3. LANGUAGE INSTRUCTION 🚨
     let mediumText = "";
-    if (isEnglishSubject || medium === "English") {
-        mediumText = " CRITICAL LANGUAGE RULE: Entire output (questions, options, explanations) MUST be in PROFESSIONAL ENGLISH.";
+    if (sub.includes("english") || medium === "English") {
+        mediumText = "CRITICAL LANGUAGE RULE: Entire output (questions, options, explanations) MUST be in PROFESSIONAL ENGLISH.";
     } else if (medium === "Hindi") {
-        mediumText = " CRITICAL LANGUAGE RULE: The questions, options (A, B, C, D), and explanations MUST be entirely in PURE HINDI (Devanagari script). Only retain technical Math/Science formulas in English LaTeX.";
+        mediumText = "CRITICAL LANGUAGE RULE: The questions, options (A,B,C,D), and explanations MUST be entirely in PURE HINDI (Devanagari script). However, strictly retain all technical Math/Science formulas, variables, and equations in English LaTeX enclosed in '$'. DO NOT translate math variables to Hindi.";
     }
 
-    return `${persona}\n${mediumText}`;
+    return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject || 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
 // 🔥 SOLUTION: SPEED OPTIMIZATION (TOKEN REDUCTION) & MATH FORMATTING
 // 🔥 SOLUTION: SPEED OPTIMIZATION, IN-DEPTH EXPLANATION & CLEAN LATEX
@@ -423,18 +424,15 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 // 🔥 1.B CUSTOM TEST GENERATION (NO UPLOADS - RTS STYLE) 🔥 //
 // =======================================================================
 app.post('/api/v1/generate-custom-test', async (req, res) => {
-    // 🔥 Safe extraction of user ID (fallback to guest_user)
     let userId = req.user ? req.user.uid : 'guest_user';
     let requiredCredits = 0;
     let creditsDeducted = false;
 
     try {
-        // 🔥 Sab naye frontend variables yahan safely extract honge
         let { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
         const qCount = Number(questionCount) || 10;
         
-        // 🔥 BHASHA (LANGUAGE) KA PAKKA INTEZAAM 🔥
-        // Naye frontend me board exact 'BSEB (Bihar Board)' bhejta hai
+        // Hindi Auto-Detect for BSEB
         if (!medium && (board === 'Bihar Board' || board === 'BSEB (Bihar Board)' || targetExam === 'Bihar Board')) {
             medium = 'Hindi'; 
         }
@@ -442,7 +440,6 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
         let finalRemainingCredits = "Skipped (Guest)";
 
-        // 🔥 BULLETPROOF GUEST LOGIC (Same as Notes Upload)
         if (userId === 'guest_user') {
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
             const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); 
@@ -452,23 +449,15 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                 const ipDoc = await transaction.get(ipRef);
                 let attempts = 0;
                 if (ipDoc.exists) attempts = ipDoc.data().attempts || 0;
-                
                 if (attempts >= 2) throw new Error("GUEST_LIMIT_REACHED");
                 
-                transaction.set(ipRef, { 
-                    attempts: attempts + 1, 
-                    lastUsed: admin.firestore.FieldValue.serverTimestamp(),
-                    ip: clientIp 
-                }, { merge: true });
+                transaction.set(ipRef, { attempts: attempts + 1, lastUsed: admin.firestore.FieldValue.serverTimestamp(), ip: clientIp }, { merge: true });
             });
-        } 
-        // 🔥 LOGGED IN USER LOGIC
-        else {
+        } else {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
                 const userDoc = await transaction.get(userRef);
-                let currentCredits = 30;
-                let userPlan = 'Free';
+                let currentCredits = 30, userPlan = 'Free';
                 if (userDoc.exists) {
                     if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
                     if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
@@ -479,10 +468,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                 if (userPlan === 'Elite') maxAllowedQs = 60;
                 if (userPlan === 'Institute') maxAllowedQs = 150;
 
-                if (qCount > maxAllowedQs) {
-                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade to unlock more.`);
-                }
-
+                if (qCount > maxAllowedQs) throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test.`);
                 if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
                 
                 finalRemainingCredits = currentCredits - requiredCredits;
@@ -493,41 +479,11 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
         const streamContext = stream ? `Stream: ${stream}. ` : "";
         
-        // 🔥 1. LANGUAGE ENFORCER 🔥
-        let languageRule = "";
-        if (medium && medium.toLowerCase() === 'hindi') {
-            languageRule = `🚨 CRITICAL LANGUAGE RULE: The ENTIRE response (Questions, Options, and Detailed Explanations) MUST be in PURE HINDI (Devanagari script). 
-            HOWEVER, all mathematical symbols, variables, chemical formulas, and equations MUST remain in standard English LaTeX. Do NOT translate technical terms if they sound unnatural.`;
-        } else {
-            languageRule = "🚨 CRITICAL LANGUAGE RULE: The entire output must be in professional English.";
-        }
-
-        // 🔥 2. SUBJECT-SPECIFIC HARDCORE LOGIC 🔥
-        let subjectSpecificRules = "";
-        const subLower = subject.toLowerCase();
-        if (subLower.includes('physics')) {
-            subjectSpecificRules = `PHYSICS DIRECTIVE: Intertwine multiple concepts (e.g., Mechanics + Electromagnetism + Thermodynamics). Use non-ideal conditions (variable mass, friction, air resistance). Focus on heavy calculus-based derivations and multi-body systems.`;
-        } else if (subLower.includes('chemistry')) {
-            subjectSpecificRules = `CHEMISTRY DIRECTIVE: For Organic, require 3-4 step reaction mechanisms testing stereochemistry and major/minor product exceptions. For Physical, mix equilibrium with thermodynamics or kinetics. For Inorganic, focus on deep exceptions, molecular orbital theory, and coordination compounds.`;
-        } else if (subLower.includes('math')) {
-            subjectSpecificRules = `MATH DIRECTIVE: If Algebra (P&C, Probability, Sequence), use complex constraints, cases, and abstract sets. If Coordinate Geometry (Conics), intertwine locus, tangents, and calculus. Focus on rigorous algebraic manipulation. Avoid simple single-formula questions.`;
-        } else {
-            subjectSpecificRules = `EXAM DIRECTIVE: Generate highly confusing logical distractors similar to official tier-1 level exams. Focus on tricky edge cases.`;
-        }
-
-        // 🔥 3. THE ULTIMATE PROMPT ENGINE 🔥
-        const prompt = `You are an elite expert question paper setter for the ${targetExam || 'Competitive'} exam.
-        YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", specifically focusing on the chapter/topic "${chapter}".
-        ${streamContext}Difficulty Level: ${difficulty || 'Medium'}.
+        // Clean & Centralized Prompt
+        const prompt = `You are an elite expert question paper setter.
+        YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", focusing on the topic "${chapter}".
         
-        🚨 CRITICAL DIFFICULTY DIRECTIVES (MUST FOLLOW):
-        1. NO DIRECT FORMULAS: Never ask a question that can be solved using a single direct formula.
-        2. ${subjectSpecificRules}
-        3. PYQ MIMICRY: The structure, length, and trickiness of the questions MUST perfectly mimic the actual ${targetExam} Previous Year Questions (PYQs) from recent years.
-        4. TRICKY OPTIONS: The incorrect options (A, B, C, D) MUST represent common student calculation errors, sign mistakes, or conceptual traps.
-        
-        ${languageRule}
-        ${buildExamPersona(targetExam, board, stream, medium, subject, difficulty || 'medium')}
+        ${buildExamPersona(targetExam, board, streamContext, medium, subject, difficulty || 'medium')}
         ${strictNegativeRules}
         
         Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step mathematical/logical explanation proving why the answer is correct." } ]`;
@@ -540,19 +496,11 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
     } catch (error) {
         console.error("🚨 Custom Generation Error:", error.message || error);
-
-        // 🔥 CLEAN ERROR LOGIC (No ugly JSON/503 errors)
         let errorMessage = "AI Servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute.";
-        
-        if (error.message === "GUEST_LIMIT_REACHED") {
-            errorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
-        } else if (error.message && (error.message.includes("Plan Limit") || error.message.includes("Insufficient credits"))) {
-            errorMessage = error.message;
-        } else if (error.message && !error.message.includes("ApiError") && !error.message.includes("503") && !error.message.includes("JSON")) {
-            errorMessage = error.message; 
-        }
+        if (error.message === "GUEST_LIMIT_REACHED") errorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
+        else if (error.message && (error.message.includes("Plan Limit") || error.message.includes("Insufficient credits"))) errorMessage = error.message;
+        else if (error.message && !error.message.includes("ApiError") && !error.message.includes("503") && !error.message.includes("JSON")) errorMessage = error.message; 
 
-        // Auto-Refund Mechanic
         if (userId !== 'guest_user' && creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -561,18 +509,13 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                     if (userDoc.exists) {
                         let currentCredits = Number(userDoc.data().credits || 0);
                         transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
-                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId}`);
                     }
                 });
-            } catch (refundErr) {
-                console.error("🚨 Refund Transaction Failed:", refundErr);
-            }
+            } catch (refundErr) {}
         }
-
         res.status(500).json({ success: false, error: errorMessage });
     }
-});
-// =======================================================================
+});// =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
 // =======================================================================
 app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => {
