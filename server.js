@@ -515,12 +515,17 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         }
         res.status(500).json({ success: false, error: errorMessage });
     }
-});// =======================================================================
-// 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
+});
+// =======================================================================
+// 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads, AI, Refund & SK Code) 🔥
 // =======================================================================
 app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => {
+    let requiredCredits = 0;
+    let creditsDeducted = false;
+    const userId = req.user ? req.user.uid : 'guest_user';
+
     try {
-        if (!req.user || req.user.uid === 'guest_user') {
+        if (userId === 'guest_user') {
             return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
         }
 
@@ -535,10 +540,9 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         const qCount = Number(questionCount) || 15;
-        const userId = req.user.uid;
+        requiredCredits = Math.max(5, Math.ceil(qCount * 0.5));
         
-        const requiredCredits = Math.max(5, Math.ceil(qCount * 0.5));
-        
+        // 💰 1. DEDUCT CREDITS FIRST
         const userRef = db.collection('users').doc(userId);
         await db.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
@@ -549,7 +553,9 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} to generate this group test.`);
             transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
         });
+        creditsDeducted = true; // Mark as deducted so we can refund if AI fails
 
+        // 🧠 2. GENERATE PROMPT
         let prompt = "";
         if (mode === 'manual-key') {
             prompt = `You are a strict data extraction bot. The attached files contain a Question Paper and an Answer Key. 
@@ -565,7 +571,6 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         const parts = [{ text: prompt }];
-        
         let totalSize = 0;
         req.files.forEach(file => { 
             totalSize += file.size;
@@ -576,18 +581,18 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             throw new Error("Uploaded files are too large for AI processing. Please upload compressed PDFs or fewer images (Max 8MB total).");
         }
 
+        // 🤖 3. CALL AI
         const response = await generateAIContent(parts, true);
-        const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const safeJsonText = cleanText.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
-        const quizArray = JSON.parse(safeJsonText);
+        const quizArray = safeJSONParse(response.text);
 
+        // 🎟️ 4. GENERATE "SK" CODE (No Hyphens, Starts with SK, Pure Alphanumeric)
         const safeName = xss(className).trim();
-        const prefix = safeName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ABC').substring(0, 3);
-        const randomSuffix = crypto.randomBytes(2).toString('hex').toUpperCase();
-        const generatedCode = `${prefix}-${randomSuffix}`;
+        const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 random chars
+        const generatedCode = `SK${randomHex}`; // Output e.g., SK8B2F9A
         
         const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
 
+        // 💾 5. SAVE TO DATABASE
         await db.collection('LiveExams').doc(generatedCode).set({
             code: generatedCode,
             name: safeName,
@@ -606,10 +611,27 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
 
     } catch (error) {
         console.error("🚨 Class Creation Error:", error);
+
+        // ♻️ AUTO-REFUND MECHANIC (Only refund if credits were actually deducted)
+        if (creditsDeducted) {
+            try {
+                const userRef = db.collection('users').doc(userId);
+                await db.runTransaction(async (transaction) => {
+                    const userDoc = await transaction.get(userRef);
+                    if (userDoc.exists) {
+                        let currentCredits = Number(userDoc.data().credits || 0);
+                        transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
+                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to teacher ${userId}`);
+                    }
+                });
+            } catch (refundErr) {
+                console.error("🚨 Refund Transaction Failed:", refundErr);
+            }
+        }
+
         res.status(500).json({ success: false, error: error.message || "Failed to generate class. Check files." });
     }
 });
-
 // =======================================================================
 // 🔥 3. STUDENT JOINS A CLASS (Verify Code) 🔥
 // =======================================================================
