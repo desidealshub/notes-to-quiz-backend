@@ -420,32 +420,49 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
 // ======================================================================= //
 // 🔥 1.B CUSTOM TEST GENERATION (NO UPLOADS - RTS STYLE) 🔥 //
-// =======================================================================_
+// =======================================================================
 app.post('/api/v1/generate-custom-test', async (req, res) => {
-    let userId = req.user.uid;
+    // 🔥 Safe extraction of user ID (fallback to guest_user)
+    let userId = req.user ? req.user.uid : 'guest_user';
     let requiredCredits = 0;
     let creditsDeducted = false;
 
     try {
-        // 🔥 Now safely extracting Board and Stream from frontend payload
-        // NOTE: 'const' ko 'let' me badal diya taaki hum bhasha (medium) ko force change kar sakein
+        // 🔥 Sab naye frontend variables yahan safely extract honge
         let { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
         const qCount = Number(questionCount) || 10;
         
         // 🔥 BHASHA (LANGUAGE) KA PAKKA INTEZAAM 🔥
-        // Agar bachhe ne Bihar Board chuna hai aur medium blank/null aaya hai, toh auto-force Hindi kar do
-        if (!medium && (board === 'Bihar Board' || targetExam === 'Bihar Board')) {
+        // Naye frontend me board exact 'BSEB (Bihar Board)' bhejta hai
+        if (!medium && (board === 'Bihar Board' || board === 'BSEB (Bihar Board)' || targetExam === 'Bihar Board')) {
             medium = 'Hindi'; 
         }
-        
+
         requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
         let finalRemainingCredits = "Skipped (Guest)";
 
+        // 🔥 BULLETPROOF GUEST LOGIC (Same as Notes Upload)
         if (userId === 'guest_user') {
-            throw new Error("Custom practice tests are only available for logged-in users.");
-        }
-
-        if (userId !== 'guest_user') {
+            const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); 
+            const ipRef = db.collection('GuestLimits').doc(ipHash);
+            
+            await db.runTransaction(async (transaction) => {
+                const ipDoc = await transaction.get(ipRef);
+                let attempts = 0;
+                if (ipDoc.exists) attempts = ipDoc.data().attempts || 0;
+                
+                if (attempts >= 2) throw new Error("GUEST_LIMIT_REACHED");
+                
+                transaction.set(ipRef, { 
+                    attempts: attempts + 1, 
+                    lastUsed: admin.firestore.FieldValue.serverTimestamp(),
+                    ip: clientIp 
+                }, { merge: true });
+            });
+        } 
+        // 🔥 LOGGED IN USER LOGIC
+        else {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
                 const userDoc = await transaction.get(userRef);
@@ -473,29 +490,41 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             creditsDeducted = true;
         }
 
+        const streamContext = stream ? `Stream: ${stream}. ` : "";
+        
         // 🔥 PROMPT FOR RTS STYLE GENERATION (HIGH EXAM FIDELITY) 🔥
         const prompt = `You are an elite expert question paper setter for the ${targetExam || 'Competitive'} exam.
         YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", specifically focusing on the chapter/topic "${chapter}".
-        Difficulty Level: ${difficulty || 'Medium'}.
+        ${streamContext}Difficulty Level: ${difficulty || 'Medium'}.
         
         CRITICAL REQUIREMENT: If the topic involves History, Polity, or GK, strongly focus on specific Dates, Names, Events, and Data. If Science/Math, focus on deep conceptual numericals and theorems. Base the difficulty and format strictly on Previous Year Questions (PYQs) of this specific exam.
         
-        ${buildExamPersona(targetExam, board, stream, medium, subject)}
+        ${buildExamPersona(targetExam, board, stream, medium, subject, difficulty || 'medium')}
         ${strictNegativeRules}
         
         Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step explanation proving why the answer is mathematically or factually correct." } ]`;
         
         const parts = [{ text: prompt }];
-
         const response = await generateAIContent(parts, true);
-     // 🔥 SOLUTION: APPLYING THE SAFE JSON PARSER
         const quizArray = safeJSONParse(response.text);
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
 
     } catch (error) {
-        console.error("🚨 Custom Generation Error:", error);
+        console.error("🚨 Custom Generation Error:", error.message || error);
 
+        // 🔥 CLEAN ERROR LOGIC (No ugly JSON/503 errors)
+        let errorMessage = "AI Servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute.";
+        
+        if (error.message === "GUEST_LIMIT_REACHED") {
+            errorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
+        } else if (error.message && (error.message.includes("Plan Limit") || error.message.includes("Insufficient credits"))) {
+            errorMessage = error.message;
+        } else if (error.message && !error.message.includes("ApiError") && !error.message.includes("503") && !error.message.includes("JSON")) {
+            errorMessage = error.message; 
+        }
+
+        // Auto-Refund Mechanic
         if (userId !== 'guest_user' && creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -504,6 +533,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                     if (userDoc.exists) {
                         let currentCredits = Number(userDoc.data().credits || 0);
                         transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
+                        console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId}`);
                     }
                 });
             } catch (refundErr) {
@@ -511,13 +541,9 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             }
         }
 
-        res.status(500).json({ 
-            success: false, 
-            error: error.message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
-        });
+        res.status(500).json({ success: false, error: errorMessage });
     }
 });
-
 
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
