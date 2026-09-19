@@ -214,20 +214,21 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
     return `${persona}\n${mediumText}`;
 }
 // 🔥 SOLUTION: SPEED OPTIMIZATION (TOKEN REDUCTION) & MATH FORMATTING
+// 🔥 SOLUTION: SPEED OPTIMIZATION, IN-DEPTH EXPLANATION & CLEAN LATEX
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
 1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct. Do NOT hallucinate.
 2. 📅 DEEP DATA & PYQ INTEGRATION: Ask highly specific questions mirroring official exams.
-3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves (e.g., "According to the notes").
+3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves.
 4. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student mistakes.
-5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): You MUST use LaTeX enclosed in single '$' for ALL equations, variables, and formulas. 
-🚨 CRITICAL EXPLANATION RULE: You MUST wrap every single mathematical term in the 'explanation' field with '$' signs. Never write raw LaTeX (like \\frac) without '$'. Avoid using apostrophes/single quotes in math (use ^\\prime instead).
-🚨 STRICT JSON ESCAPING RULE: You MUST DOUBLE-ESCAPE all backslashes in LaTeX! Example: Use \\\\frac instead of \\frac. Use \\\\alpha instead of \\alpha. If you do not double-escape, the JSON parser WILL CRASH.
-6. ⚡ SPEED & UX RULE (SHORT OPTIONS & EXPLANATIONS): 
+5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): 
+   - You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$,$\\alpha + \\beta$).     - DO NOT use double '$$' signs. DO NOT wrap equations in markdown backticks.
+   - Write NORMAL LaTeX (like \\frac, \\sqrt, \\alpha). Do NOT double-escape backslashes (our system handles JSON escaping automatically). Avoid using single quotes in math (use ^\\prime instead).
+6. ⚡ EXPLANATION DEPTH RULE: 
    - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
-   - Keep the 'explanation' field EXTREMELY concise. Maximum 2 sentences. Get straight to the formula or core concept.
+   - Provide a HIGHLY DETAILED, step-by-step mathematical or logical proof in the 'explanation' field. Write at least 3-4 paragraphs breaking down EVERY single calculation step. DO NOT use markdown code blocks inside the explanation. Just write plain text intertwined with $LaTeX$.
 7. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json.
-8. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$. For chemical bonds, keep it simple (e.g., $-CHO$, $>C=O$).`;
+8. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$.`;
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
 // Ye function ensure karega ki agar AI galti se single backslash bhej de, toh server usko auto-fix karke crash hone se bacha le.
 function safeJSONParse(str) {
