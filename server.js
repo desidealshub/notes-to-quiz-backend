@@ -158,45 +158,61 @@ verifyAuthToken = async (req, res, next) => {
 app.use('/api/v1/', verifyAuthToken);
 
 // =======================================================================
-// 🔥 UNIVERSAL PROMPT ENGINEERING LOGIC (WITH BOARD, STREAM, MEDIUM & SUBJECT BYPASS) 🔥
+// 🔥 UNIVERSAL PROMPT ENGINEERING (WITH ULTRA-HARDCORE DIFFICULTY INJECTOR) 🔥
 // =======================================================================
-function buildExamPersona(academicLevel, board = null, stream = null, medium = null, subject = null) {
+function buildExamPersona(academicLevel, board = null, stream = null, medium = null, subject = null, difficulty = 'medium') {
     let persona = "";
+    let diffRules = "";
+    const isMathOrScience = subject && (subject.toLowerCase().includes("math") || subject.toLowerCase().includes("physics") || subject.toLowerCase().includes("chemistry"));
 
-    // 10th & 12th Board Specific Logic
+    // 🚨 1. THE DIFFICULTY ENGINE (THE GAME CHANGER) 🚨
+    if (difficulty.toLowerCase() === 'hard') {
+        diffRules = `🔥 EXTREME DIFFICULTY MODE ACTIVE: 
+        - DO NOT ask any single-step or direct formula-based questions. 
+        - For Math/Science, you MUST intertwine 2 to 3 distinct concepts in a single question (e.g., mix Matrices with Integration, or Probability with Complex Numbers).
+        - Calculations MUST be rigorous, lengthy, and require high analytical thinking.
+        - The distractors (incorrect options) MUST represent common student calculation errors or conceptual traps. 
+        - If an average 11th-grade student can solve this easily, YOU HAVE FAILED YOUR TASK. Make them sweat.`;
+    } else if (difficulty.toLowerCase() === 'easy') {
+        diffRules = "Difficulty Standard: Easy (NCERT Level). Focus on direct definitions, basic formulas, and fundamental understanding.";
+    } else {
+        diffRules = "Difficulty Standard: Medium (Mains Level). Focus on standard application of concepts, moderate calculations, and typical previous year board/Mains questions.";
+    }
+
+    // 🚨 2. EXAM TARGET LOGIC 🚨
     if (academicLevel === "class10" || academicLevel === "class12") {
         const levelName = academicLevel === "class10" ? "High School (Class 10th)" : "Senior Secondary (Class 12th)";
         const boardText = board ? ` You are setting an official board paper for the ${board}.` : "";
         const streamText = stream ? ` Stream: ${stream}.` : "";
-        
-        // 🔥 LANGUAGE / MEDIUM INSTRUCTION (WITH ENGLISH BYPASS) 🔥
-        let mediumText = "";
-        const isEnglishSubject = subject && subject.toLowerCase().includes("english");
-
-        if (isEnglishSubject) {
-            mediumText = " CRITICAL LANGUAGE RULE: Since this is an English language subject, the questions, options, and explanations MUST be entirely in PROFESSIONAL ENGLISH, regardless of the student's background medium.";
-        } else if (medium === "Hindi") {
-            mediumText = " CRITICAL LANGUAGE RULE: The questions, options (A, B, C, D), and explanations MUST be entirely in PURE HINDI (Devanagari script), matching Bihar Board textbook standards.";
-        } else if (medium === "English") {
-            mediumText = " CRITICAL LANGUAGE RULE: The questions, options, and explanations MUST be entirely in PROFESSIONAL ENGLISH.";
-        }
-
-        persona = `Difficulty Standard: ${levelName}.${boardText}${streamText}${mediumText} Focus on standard board exam formats, previous year questions (PYQs), and conceptual clarity.`;
+        persona = `Target: ${levelName}.${boardText}${streamText} ${diffRules}`;
     } 
-    // Competitive Exams (Default to English or Hindi based on standard patterns)
-    else if (academicLevel === "NEET") {
-        persona = "Difficulty Standard: NEET UG. Generate highly conceptual questions, direct formula-based numericals, and tricky assertion-reasons mirroring NTA sets.";
-    } else if (academicLevel === "JEE Mains" || academicLevel === "JEE Advanced") {
-        persona = `Difficulty Standard: ${academicLevel}. Focus on multi-step application numericals and complex analytical problems based on NTA PYQs.`;
-    } else if (["SSC", "Banking", "UPSC", "State PCS", "railway", "bihar_police", "iti"].includes(academicLevel)) {
-        persona = `Difficulty Standard: ${academicLevel}. Generate official exam-level questions with realistic, confusing distractors mirroring official PYQs.`;
+    else if (academicLevel === "neet") {
+        persona = `Target: NEET UG. ${diffRules} Incorporate tricky Assertion-Reasoning, Statement 1/2, and match-the-following types mirroring NTA's toughest sets.`;
+    } 
+    else if (academicLevel === "jee_mains") {
+        persona = `Target: JEE Mains. ${diffRules} Focus on speed-breaker numericals and logical traps based on recent NTA shifts.`;
+    } 
+    else if (academicLevel === "jee_adv") {
+        // OVERRIDE FOR ADVANCED: Hamesha hardcore rahega
+        persona = `Target: JEE Advanced. 🚨 ABSOLUTE MAXIMUM DIFFICULTY 🚨. Do not ask NCERT level questions. Every question MUST involve heavy multi-concept integration (e.g., Coordinate Geometry + Calculus). Use multiple edge cases. Options should look similar to confuse the student.`;
+    } 
+    else if (["SSC", "Banking", "UPSC", "State PCS", "railway", "bihar_police", "iti"].includes(academicLevel)) {
+        persona = `Target: ${academicLevel}. ${diffRules} Generate highly confusing logical distractors similar to official tier-1/tier-2 exam levels.`;
     } else {
-        persona = "Generate standard, well-structured academic questions testing deep understanding.";
+        persona = `Target: Academic Assessment. ${diffRules}`;
     }
 
-    return persona;
-}
+    // 🚨 3. LANGUAGE / MEDIUM INSTRUCTION 🚨
+    const isEnglishSubject = subject && subject.toLowerCase().includes("english");
+    let mediumText = "";
+    if (isEnglishSubject || medium === "English") {
+        mediumText = " CRITICAL LANGUAGE RULE: Entire output (questions, options, explanations) MUST be in PROFESSIONAL ENGLISH.";
+    } else if (medium === "Hindi") {
+        mediumText = " CRITICAL LANGUAGE RULE: The questions, options (A, B, C, D), and explanations MUST be entirely in PURE HINDI (Devanagari script). Only retain technical Math/Science formulas in English LaTeX.";
+    }
 
+    return `${persona}\n${mediumText}`;
+}
 // 🔥 SOLUTION: SPEED OPTIMIZATION (TOKEN REDUCTION) & MATH FORMATTING
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
