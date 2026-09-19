@@ -92,12 +92,11 @@ razorpay = new Razorpay({
 });
 
 // 🔥 GEMINI AI SDK SETUP (MULTI-KEY FALLBACK ADDED HERE) 🔥
-{ GoogleGenAI } = require('@google/genai');
-rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
-apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
-aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
+const { GoogleGenAI } = require('@google/genai');
+const rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
+const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
+const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
 let currentClientIndex = 0;
-
 // Master AI Generation Function (Now Smart & Flexible)
 async function generateAIContent(parts, isJsonMode = false) {
     let attempts = 0;
