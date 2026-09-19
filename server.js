@@ -211,7 +211,7 @@ const strictNegativeRules = `
    - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
    - Keep the 'explanation' field EXTREMELY concise. Maximum 2 sentences. Get straight to the formula or core concept.
 7. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json.`;
-
+8. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$. For chemical bonds, keep it simple (e.g., $-CHO$, $>C=O$).
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
 // Ye function ensure karega ki agar AI galti se single backslash bhej de, toh server usko auto-fix karke crash hone se bacha le.
 function safeJSONParse(str) {
