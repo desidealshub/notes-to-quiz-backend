@@ -34,7 +34,7 @@ const app = express();
 app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
 
 // Configure multer for memory storage (Max 10MB per file)
-const upload = multer({ 
+upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } 
 });
@@ -46,7 +46,7 @@ const upload = multer({
 app.use(helmet());
 
 // 🔥 1. STRICT CORS POLICY (Hackers block karne ke liye)
-const allowedOrigins = [
+allowedOrigins = [
     'https://desidealshub.com', 
     'https://quiz.desidealshub.com', 
     'http://localhost:3000',
@@ -70,7 +70,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ANTI-DDOS / SPAM GUARD
-const apiLimiter = rateLimit({
+apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 50, 
     message: { 
@@ -86,35 +86,35 @@ app.use('/api/', apiLimiter);
 // --- INITIALIZE RAZORPAY & AI CLIENT ---
 // ==========================================
 
-const razorpay = new Razorpay({
+razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_dummykey',
     key_secret: process.env.RAZORPAY_SECRET || 'dummysecret'
 });
 
 // 🔥 GEMINI AI SDK SETUP (MULTI-KEY FALLBACK ADDED HERE) 🔥
-const { GoogleGenAI } = require('@google/genai');
-const rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
-const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
-const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
+{ GoogleGenAI } = require('@google/genai');
+rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
+apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
+aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
 let currentClientIndex = 0;
 
 // Master AI Generation Function (Now Smart & Flexible)
 async function generateAIContent(parts, isJsonMode = false) {
     let attempts = 0;
-    const maxRetries = 3;
+    maxRetries = 3;
     let lastError;
 
     while (attempts < maxRetries) {
         try {
-            const ai = aiClients[currentClientIndex];
+            ai = aiClients[currentClientIndex];
             
             // Setting config dynamically based on what the route needs
-            const configParams = {};
+            configParams = {};
             if (isJsonMode) {
                 configParams.responseMimeType = "application/json";
             }
 
-            const response = await ai.models.generateContent({
+            response = await ai.models.generateContent({
                 model: 'gemini-3.6-flash',
                 contents: parts,
                 config: configParams
@@ -139,9 +139,9 @@ async function generateAIContent(parts, isJsonMode = false) {
 // ==========================================
 // --- AUTHENTICATION MIDDLEWARE ---
 // ==========================================
-const verifyAuthToken = async (req, res, next) => {
+verifyAuthToken = async (req, res, next) => {
     try {
-        const authHeader = req.headers.authorization;
+        authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split('Bearer ')[1];
             const decodedToken = await admin.auth().verifyIdToken(token);
@@ -413,8 +413,15 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
     try {
         // 🔥 Now safely extracting Board and Stream from frontend payload
-        const { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
+        // NOTE: 'const' ko 'let' me badal diya taaki hum bhasha (medium) ko force change kar sakein
+        let { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
         const qCount = Number(questionCount) || 10;
+        
+        // 🔥 BHASHA (LANGUAGE) KA PAKKA INTEZAAM 🔥
+        // Agar bachhe ne Bihar Board chuna hai aur medium blank/null aaya hai, toh auto-force Hindi kar do
+        if (!medium && (board === 'Bihar Board' || targetExam === 'Bihar Board')) {
+            medium = 'Hindi'; 
+        }
         
         requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
         let finalRemainingCredits = "Skipped (Guest)";
