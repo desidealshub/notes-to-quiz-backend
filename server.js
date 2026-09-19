@@ -492,17 +492,44 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
         const streamContext = stream ? `Stream: ${stream}. ` : "";
         
-        // 🔥 PROMPT FOR RTS STYLE GENERATION (HIGH EXAM FIDELITY) 🔥
+        // 🔥 1. LANGUAGE ENFORCER 🔥
+        let languageRule = "";
+        if (medium && medium.toLowerCase() === 'hindi') {
+            languageRule = `🚨 CRITICAL LANGUAGE RULE: The ENTIRE response (Questions, Options, and Detailed Explanations) MUST be in PURE HINDI (Devanagari script). 
+            HOWEVER, all mathematical symbols, variables, chemical formulas, and equations MUST remain in standard English LaTeX. Do NOT translate technical terms if they sound unnatural.`;
+        } else {
+            languageRule = "🚨 CRITICAL LANGUAGE RULE: The entire output must be in professional English.";
+        }
+
+        // 🔥 2. SUBJECT-SPECIFIC HARDCORE LOGIC 🔥
+        let subjectSpecificRules = "";
+        const subLower = subject.toLowerCase();
+        if (subLower.includes('physics')) {
+            subjectSpecificRules = `PHYSICS DIRECTIVE: Intertwine multiple concepts (e.g., Mechanics + Electromagnetism + Thermodynamics). Use non-ideal conditions (variable mass, friction, air resistance). Focus on heavy calculus-based derivations and multi-body systems.`;
+        } else if (subLower.includes('chemistry')) {
+            subjectSpecificRules = `CHEMISTRY DIRECTIVE: For Organic, require 3-4 step reaction mechanisms testing stereochemistry and major/minor product exceptions. For Physical, mix equilibrium with thermodynamics or kinetics. For Inorganic, focus on deep exceptions, molecular orbital theory, and coordination compounds.`;
+        } else if (subLower.includes('math')) {
+            subjectSpecificRules = `MATH DIRECTIVE: If Algebra (P&C, Probability, Sequence), use complex constraints, cases, and abstract sets. If Coordinate Geometry (Conics), intertwine locus, tangents, and calculus. Focus on rigorous algebraic manipulation. Avoid simple single-formula questions.`;
+        } else {
+            subjectSpecificRules = `EXAM DIRECTIVE: Generate highly confusing logical distractors similar to official tier-1 level exams. Focus on tricky edge cases.`;
+        }
+
+        // 🔥 3. THE ULTIMATE PROMPT ENGINE 🔥
         const prompt = `You are an elite expert question paper setter for the ${targetExam || 'Competitive'} exam.
         YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", specifically focusing on the chapter/topic "${chapter}".
         ${streamContext}Difficulty Level: ${difficulty || 'Medium'}.
         
-        CRITICAL REQUIREMENT: If the topic involves History, Polity, or GK, strongly focus on specific Dates, Names, Events, and Data. If Science/Math, focus on deep conceptual numericals and theorems. Base the difficulty and format strictly on Previous Year Questions (PYQs) of this specific exam.
+        🚨 CRITICAL DIFFICULTY DIRECTIVES (MUST FOLLOW):
+        1. NO DIRECT FORMULAS: Never ask a question that can be solved using a single direct formula.
+        2. ${subjectSpecificRules}
+        3. PYQ MIMICRY: The structure, length, and trickiness of the questions MUST perfectly mimic the actual ${targetExam} Previous Year Questions (PYQs) from recent years.
+        4. TRICKY OPTIONS: The incorrect options (A, B, C, D) MUST represent common student calculation errors, sign mistakes, or conceptual traps.
         
+        ${languageRule}
         ${buildExamPersona(targetExam, board, stream, medium, subject, difficulty || 'medium')}
         ${strictNegativeRules}
         
-        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step explanation proving why the answer is mathematically or factually correct." } ]`;
+        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step mathematical/logical explanation proving why the answer is correct." } ]`;
         
         const parts = [{ text: prompt }];
         const response = await generateAIContent(parts, true);
@@ -544,7 +571,6 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         res.status(500).json({ success: false, error: errorMessage });
     }
 });
-
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads & AI) 🔥
 // =======================================================================
