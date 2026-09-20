@@ -419,12 +419,24 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
     } catch (error) {
         console.error("🚨 Individual Generation Error:", error.message);
 
-        let errorMessage = "Our AI servers are experiencing high demand right now. Please try again in 1 minute.";
+        // Default Clean Message
+        let cleanErrorMessage = "Oops! Something went wrong while generating the test. Please try again.";
         
+        // 1. BUSINESS LOGIC ERRORS (Tere purane errors jo user ko dikhne chahiye)
         if (error.message === "GUEST_LIMIT_REACHED") {
-            errorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
+            cleanErrorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
         } else if (error.message.includes("Plan Limit") || error.message.includes("Insufficient credits") || error.message.includes("large")) {
-            errorMessage = error.message;
+            cleanErrorMessage = error.message; 
+        } 
+        // 2. GOOGLE AI API ERRORS (Naya Smart Interceptor)
+        else if (error.message.includes("Quota exceeded") || error.message.includes("429")) {
+            cleanErrorMessage = "Server is currently busy with high traffic. Please wait 1 minute and click generate again.";
+        } else if (error.message.includes("503") || error.message.includes("overloaded")) {
+            cleanErrorMessage = "The AI engine is temporarily overloaded. Please try again in 10 seconds.";
+        } else if (error.message.includes("JSON") || error.message.includes("parse")) {
+            cleanErrorMessage = "There was a formatting issue with the generated questions. Please regenerate.";
+        } else if (error.message.includes("Safety") || error.message.includes("blocked")) {
+            cleanErrorMessage = "Your notes contain restricted or unclear content. Please upload a clearer document.";
         }
 
         // AUTO-REFUND MECHANIC (Only refund if it wasn't a guest error or validation error)
@@ -444,7 +456,10 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        res.status(500).json({ success: false, error: error.message || "Our AI servers are experiencing high demand right now. Your credits have been safely refunded. Please try again in 1 minute." 
+        // 🔥 THE MAIN FIX: Raw 'error.message' ki jagah cleanErrorMessage bhej rahe hain
+        res.status(500).json({ 
+            success: false, 
+            error: cleanErrorMessage 
         });
     }
 });
