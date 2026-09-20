@@ -214,8 +214,7 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
 
     return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject || 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
-// 🔥 SOLUTION: SPEED OPTIMIZATION (TOKEN REDUCTION) & MATH FORMATTING
-// 🔥 SOLUTION: SPEED OPTIMIZATION, IN-DEPTH EXPLANATION & CLEAN LATEX
+// 🔥 SOLUTION: PERFECT MATH, NO STARS, STEP-BY-STEP EXPLANATION, NO JSON CRASH
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
 1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct. Do NOT hallucinate.
@@ -225,11 +224,15 @@ const strictNegativeRules = `
 5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): 
    - You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$,$\\alpha + \\beta$).     - DO NOT use double '$$' signs. DO NOT wrap equations in markdown backticks.
    - Write NORMAL LaTeX (like \\frac, \\sqrt, \\alpha). Do NOT double-escape backslashes (our system handles JSON escaping automatically). Avoid using single quotes in math (use ^\\prime instead).
-6. ⚡ EXPLANATION DEPTH RULE: 
+6. ⚡ EXPLANATION DEPTH & FORMATTING RULE: 
    - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
-   - Provide a HIGHLY DETAILED, step-by-step mathematical or logical proof in the 'explanation' field. Write at least 3-4 paragraphs breaking down EVERY single calculation step. DO NOT use markdown code blocks inside the explanation. Just write plain text intertwined with $LaTeX$.
-7. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json.
-8. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$.`;
+   - Provide a HIGHLY DETAILED, step-by-step mathematical or logical proof in the 'explanation' field. Write at least 3-4 paragraphs breaking down EVERY single calculation step. 
+   - 🚨 YOU MUST insert the exact HTML tag <br><br> between every single step to force line breaks in the UI. DO NOT write a single dense paragraph.
+   - Example format: "Step 1: Write equation... <br><br> Step 2: Differentiate... <br><br> Final Answer: ..."
+7. ❌ ABSOLUTELY NO MARKDOWN FORMATTING IN TEXT: 
+   - NEVER use asterisks (**) or underscores (__) for bolding or emphasis. Just use plain text. DO NOT use markdown code blocks inside the explanation. Just write plain text intertwined with $LaTeX$.
+8. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text.
+9. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$.`;
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
 // Ye function ensure karega ki agar AI galti se single backslash bhej de, toh server usko auto-fix karke crash hone se bacha le.
 function safeJSONParse(str) {
@@ -287,7 +290,34 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
         res.status(500).json({ success: false, error: "Tutor is currently busy. Please try again." });
     }
 });
-
+// 🔥 SOLUTION: "CHAT WITH SOLUTION" (AI TUTOR FEATURE - NO STARS, NO GRAPHS)
+app.post('/api/v1/chat-tutor', async (req, res) => {
+    try {
+        const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
+        
+        const prompt = `You are a friendly and expert AI tutor for a student. 
+        The student encountered this question in a mock test:
+        Question: ${question}
+        Correct Answer: ${correctAnswer} (${options[correctAnswer]})
+        Official Explanation: ${explanation}
+        
+        The student is confused and asks this doubt: "${studentDoubt}"
+        
+        YOUR TASK: Explain the concept step-by-step in a very simple, easy-to-understand tone.
+        
+        🚨 CRITICAL RULES FOR AI TUTOR (DO NOT BREAK):
+        1. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
+        2. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters (like |, -, *). It breaks the mobile UI. 
+        3. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
+        4. SPACING: Use the exact HTML tag <br><br> for line breaks between paragraphs to keep it readable.`;
+        
+        const response = await generateAIContent([{ text: prompt }], false);
+        res.status(200).json({ success: true, answer: response.text });
+    } catch (error) {
+        console.error("Chat Tutor Error:", error);
+        res.status(500).json({ success: false, error: "Tutor is currently busy. Please try again." });
+    }
+});
 // ======================================================================= //
 // 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (UPLOAD NOTES) 🔥 //
 // =======================================================================
