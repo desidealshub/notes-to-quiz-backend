@@ -214,25 +214,24 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
 
     return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject || 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
-// 🔥 SOLUTION: PERFECT MATH, NO STARS, STEP-BY-STEP EXPLANATION, NO JSON CRASH
+// 🔥 SOLUTION: SMART MATH/LANGUAGE FORMATTING, NO STARS, STEP-BY-STEP EXPLANATION, NO JSON CRASH
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
 1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct. Do NOT hallucinate.
 2. 📅 DEEP DATA & PYQ INTEGRATION: Ask highly specific questions mirroring official exams.
 3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves.
 4. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student mistakes.
-5. 🧮 MATH FORMATTING (CRITICAL PREVENT CRASH): 
-   - You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$,$\\alpha + \\beta$).     - DO NOT use double '$$' signs. DO NOT wrap equations in markdown backticks.
-   - Write NORMAL LaTeX (like \\frac, \\sqrt, \\alpha). Do NOT double-escape backslashes (our system handles JSON escaping automatically). Avoid using single quotes in math (use ^\\prime instead).
+5. 🧮 SMART FORMATTING (CRITICAL PREVENT CRASH): 
+   - ⚠️ IF the subject is Math, Physics, Chemistry, or Science: You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$). DO NOT use double '$$'. Avoid using single quotes in math (use ^\\prime instead).
+   - ⚠️ IF the subject is a Language (Hindi, English, Sanskrit) or Humanities (History, Polity): DO NOT use LaTeX '$' signs. Output normal plain text with standard punctuation.
 6. ⚡ EXPLANATION DEPTH & FORMATTING RULE: 
    - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
-   - Provide a HIGHLY DETAILED, step-by-step mathematical or logical proof in the 'explanation' field. Write at least 3-4 paragraphs breaking down EVERY single calculation step. 
-   - 🚨 YOU MUST insert the exact HTML tag <br><br> between every single step to force line breaks in the UI. DO NOT write a single dense paragraph.
-   - Example format: "Step 1: Write equation... <br><br> Step 2: Differentiate... <br><br> Final Answer: ..."
+   - Provide a HIGHLY DETAILED, step-by-step logical proof or reasoning in the 'explanation' field. 
+   - 🚨 YOU MUST insert the exact HTML tag <br><br> between every single step or paragraph to force line breaks in the UI. DO NOT write a single dense paragraph.
 7. ❌ ABSOLUTELY NO MARKDOWN FORMATTING IN TEXT: 
-   - NEVER use asterisks (**) or underscores (__) for bolding or emphasis. Just use plain text. DO NOT use markdown code blocks inside the explanation. Just write plain text intertwined with $LaTeX$.
+   - NEVER use asterisks (**) or underscores (__) for bolding or emphasis. Just use plain text. DO NOT use markdown code blocks inside the explanation.
 8. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text.
-9. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') inside your LaTeX $...$.`;
+9. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') directly in your text.`;
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
 // Ye function ensure karega ki agar AI galti se single backslash bhej de, toh server usko auto-fix karke crash hone se bacha le.
 function safeJSONParse(str) {
