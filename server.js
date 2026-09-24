@@ -114,7 +114,7 @@ async function generateAIContent(parts, isJsonMode = false) {
             }
 
             response = await ai.models.generateContent({
-                model: 'gemini-3.6-flash',
+                model: 'gemini-1.5-flash',
                 contents: parts,
                 config: configParams
             });
