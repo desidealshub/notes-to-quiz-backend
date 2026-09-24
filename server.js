@@ -223,6 +223,7 @@ const strictNegativeRules = `
 4. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student mistakes.
 5. 🧮 SMART FORMATTING (CRITICAL PREVENT CRASH): 
    - ⚠️ IF the subject is Math, Physics, Chemistry, or Science: You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$). DO NOT use double '$$'. Avoid using single quotes in math (use ^\\prime instead).
+   - 🚨 CRITICAL FOR OPTIONS: Any fraction, equation, or math variable inside the options (A, B, C, D) MUST ALWAYS be wrapped in '$' signs (e.g., "A": "$\\frac{500}{7}$"). NEVER output naked LaTeX without '$' signs.
    - ⚠️ IF the subject is a Language (Hindi, English, Sanskrit) or Humanities (History, Polity): DO NOT use LaTeX '$' signs. Output normal plain text with standard punctuation.
 6. ⚡ EXPLANATION DEPTH & FORMATTING RULE: 
    - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
