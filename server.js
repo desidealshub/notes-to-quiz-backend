@@ -34,7 +34,7 @@ const app = express();
 app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
 
 // Configure multer for memory storage (Max 10MB per file)
-upload = multer({ 
+const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } 
 });
@@ -45,8 +45,8 @@ upload = multer({
 
 app.use(helmet());
 
-// 🔥 1. STRICT CORS POLICY (Hackers block karne ke liye)
-allowedOrigins = [
+// 🔥 1. STRICT CORS POLICY
+const allowedOrigins = [
     'https://desidealshub.com', 
     'https://quiz.desidealshub.com', 
     'http://localhost:3000',
@@ -70,7 +70,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ANTI-DDOS / SPAM GUARD
-apiLimiter = rateLimit({
+const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 50, 
     message: { 
@@ -86,7 +86,7 @@ app.use('/api/', apiLimiter);
 // --- INITIALIZE RAZORPAY & AI CLIENT ---
 // ==========================================
 
-razorpay = new Razorpay({
+const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_dummykey',
     key_secret: process.env.RAZORPAY_SECRET || 'dummysecret'
 });
@@ -97,23 +97,24 @@ const rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
 const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
 const aiClients = apiKeys.map(key => new GoogleGenAI({ apiKey: key }));
 let currentClientIndex = 0;
+
 // Master AI Generation Function (Now Smart & Flexible)
 async function generateAIContent(parts, isJsonMode = false) {
     let attempts = 0;
-    maxRetries = 3;
+    const maxRetries = 3;
     let lastError;
 
     while (attempts < maxRetries) {
         try {
-            ai = aiClients[currentClientIndex];
+            const ai = aiClients[currentClientIndex];
             
             // Setting config dynamically based on what the route needs
-            configParams = {};
+            const configParams = {};
             if (isJsonMode) {
                 configParams.responseMimeType = "application/json";
             }
 
-            response = await ai.models.generateContent({
+            const response = await ai.models.generateContent({
                 model: 'gemini-3.6-flash',
                 contents: parts,
                 config: configParams
@@ -122,7 +123,7 @@ async function generateAIContent(parts, isJsonMode = false) {
             return response;
         } catch (err) {
             lastError = err;
-            console.warn(`⚠️ Gemini Key ${currentClientIndex + 1} failed (Status: ${err.status || 'Unknown'}). Retrying...`);
+            console.warn(`⚠️ Gemini Key ${currentClientIndex + 1} failed (Status:${err.status || 'Unknown'}). Retrying...`);
             
             if (err.status === 429 || err.status === 503) {
                 currentClientIndex = (currentClientIndex + 1) % aiClients.length;
@@ -138,9 +139,9 @@ async function generateAIContent(parts, isJsonMode = false) {
 // ==========================================
 // --- AUTHENTICATION MIDDLEWARE ---
 // ==========================================
-verifyAuthToken = async (req, res, next) => {
+const verifyAuthToken = async (req, res, next) => {
     try {
-        authHeader = req.headers.authorization;
+        const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split('Bearer ')[1];
             const decodedToken = await admin.auth().verifyIdToken(token);
@@ -191,7 +192,7 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
     } else if (target === 'class12' || target === 'class10') {
         examStyle = `🚨 BOARD EXAM MODE (${board || 'CBSE'}): Mirror the exact pattern of board exams. Use case-study based questions, assertion-reasoning, and standard conceptual proofs.`;
     } else {
-        examStyle = `🚨 COMPETITIVE MODE: Adapt strictly to the ${academicLevel} standard for ${subject}.`;
+        examStyle = `🚨 COMPETITIVE MODE: Adapt strictly to the ${academicLevel} standard for${subject}.`;
     }
 
     // 🚨 2. DIFFICULTY SCALING 🚨
@@ -212,8 +213,9 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
         mediumText = "CRITICAL LANGUAGE RULE: The questions, options (A,B,C,D), and explanations MUST be entirely in PURE HINDI (Devanagari script). However, strictly retain all technical Math/Science formulas, variables, and equations in English LaTeX enclosed in '$'. DO NOT translate math variables to Hindi.";
     }
 
-    return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject || 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
+    return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject \vert{}\vert{} 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
+
 // 🔥 SOLUTION: SMART MATH/LANGUAGE FORMATTING, NO STARS, STEP-BY-STEP EXPLANATION, NO JSON CRASH
 const strictNegativeRules = `
 ⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
@@ -233,16 +235,14 @@ const strictNegativeRules = `
    - NEVER use asterisks (**) or underscores (__) for bolding or emphasis. Just use plain text. DO NOT use markdown code blocks inside the explanation.
 8. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text.
 9. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') directly in your text.`;
+
 // 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
-// Ye function ensure karega ki agar AI galti se single backslash bhej de, toh server usko auto-fix karke crash hone se bacha le.
 function safeJSONParse(str) {
     try {
         return JSON.parse(str);
     } catch (e) {
         try {
-            // Markdown backticks remove karo
             let cleanStr = str.replace(/```json/gi, '').replace(/```/gi, '').trim();
-            // Single backslash ko double me convert karo (sirf unhe jo standard JSON escapes nahi hain)
             cleanStr = cleanStr.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
             return JSON.parse(cleanStr);
         } catch (fatalError) {
@@ -261,36 +261,37 @@ app.get('/', (req, res) => {
     res.json({ status: 'NotesToQuiz Production Backend is Live & Secure 🚀' });
 });
 
-// 🔥 SOLUTION: SPEED DELAY (WAKE UP ROUTE)
-// Frontend jaise hi khulega, is route par ek silent ping marega taaki Render ka server 50 seconds pehle hi jaag jaye.
+// 🔥 WAKE UP ROUTE
 app.get('/api/ping', (req, res) => {
     res.status(200).send('PONG - Server is awake!');
 });
 
-// 🔥 SOLUTION: "CHAT WITH SOLUTION" (AI TUTOR FEATURE)
-// Bachhe ko agar explanation samajh na aaye, toh wo AI se cross-question kar sakega.
-app.post('/api/v1/chat-tutor', async (req, res) => {
+// 🔥 NEW: SUPPORT TICKET SUBMISSION API
+app.post('/api/v1/support-ticket', async (req, res) => {
     try {
-        const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
+        const { uid, email, name, issueType, description, timestamp } = req.body;
         
-        const prompt = `You are a friendly and expert AI tutor for a student. 
-        The student encountered this question in a mock test:
-        Question: ${question}
-        Correct Answer: ${correctAnswer} (${options[correctAnswer]})
-        Official Explanation: ${explanation}
-        
-        The student is confused and asks this doubt: "${studentDoubt}"
-        
-        YOUR TASK: Explain the concept step-by-step in a very simple, easy-to-understand tone. Use Hinglish if the doubt feels casual. Keep it encouraging. Max 4-5 short paragraphs. DO NOT use markdown code blocks, just plain text with basic bolding.`;
-        
-        const response = await generateAIContent([{ text: prompt }], false);
-        res.status(200).json({ success: true, answer: response.text });
+        // Save the ticket directly to Firebase Firestore
+        await db.collection('SupportTickets').add({
+            uid: xss(uid || 'guest'),
+            email: xss(email || 'No Email'),
+            name: xss(name || 'Guest'),
+            issueType: xss(issueType),
+            description: xss(description),
+            status: 'Open',
+            userReportedTime: timestamp,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 💡 Pro-Tip: You can later add Nodemailer here to send an email to yourself
+        res.status(200).json({ success: true, message: 'Ticket received securely.' });
     } catch (error) {
-        console.error("Chat Tutor Error:", error);
-        res.status(500).json({ success: false, error: "Tutor is currently busy. Please try again." });
+        console.error("Support Ticket Error:", error);
+        res.status(500).json({ success: false, error: "Could not save the ticket." });
     }
 });
-// 🔥 SOLUTION: "CHAT WITH SOLUTION" (AI TUTOR FEATURE - NO STARS, NO GRAPHS)
+
+// 🔥 "CHAT WITH SOLUTION" (AI TUTOR FEATURE)
 app.post('/api/v1/chat-tutor', async (req, res) => {
     try {
         const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
@@ -318,6 +319,7 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
         res.status(500).json({ success: false, error: "Tutor is currently busy. Please try again." });
     }
 });
+
 // ======================================================================= //
 // 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (UPLOAD NOTES) 🔥 //
 // =======================================================================
@@ -330,16 +332,18 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
         const { subject, questionCount, academicLevel } = config;
         
-        // 🔥 SOLUTION: SERVER-SIDE PRICING ENFORCEMENT
-        // Client side par chahe jo price dikh raha ho, deduction exactly is formula se hoga backend par.
-        const qCount = Math.min(Math.max(Number(questionCount) || 10, 5), 150); // Cap between 5 and 150
+        let qCount = Number(questionCount) || 10;
+        
+        // BACKEND LIMIT ENFORCEMENT
+        if (userId === 'guest_user') qCount = Math.min(qCount, 5); // Guest strict 5 limit
+
         requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
 
-        // 🔥 SOLUTION: BULLETPROOF GUEST LOGIC (IP ADDRESS FINGERPRINTING)
+        // 🔥 GUEST LOGIC (IP ADDRESS FINGERPRINTING)
         if (userId === 'guest_user') {
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-            const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); // Stronger Hash
+            const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); 
             const ipRef = db.collection('GuestLimits').doc(ipHash);
             
             await db.runTransaction(async (transaction) => {
@@ -347,28 +351,37 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                 let attempts = 0;
                 if (ipDoc.exists) attempts = ipDoc.data().attempts || 0;
                 
-                // Strict 2 limit enforcement on Database level
-                if (attempts >= 2) {
-                    throw new Error("GUEST_LIMIT_REACHED");
-                }
+                if (attempts >= 2) throw new Error("GUEST_LIMIT_REACHED");
+                
                 transaction.set(ipRef, { 
                     attempts: attempts + 1, 
                     lastUsed: admin.firestore.FieldValue.serverTimestamp(),
                     ip: clientIp 
                 }, { merge: true });
             });
-        }
-
-        // 1. DEDUCT CREDITS SAFELY & CHECK PLAN LIMITS
-        if (userId !== 'guest_user') {
+        } 
+        // 🔥 LOGGED IN USER LOGIC (FREE VS PAID)
+        else {
             const userRef = db.collection('users').doc(userId);
             await db.runTransaction(async (transaction) => {
                 const userDoc = await transaction.get(userRef);
                 let currentCredits = 30;
                 let userPlan = 'Free';
+                let freeNotesAttempts = 0;
+
                 if (userDoc.exists) {
                     if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
                     if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
+                    if (userDoc.data().freeNotesAttempts !== undefined) freeNotesAttempts = Number(userDoc.data().freeNotesAttempts);
+                }
+
+                // 🚨 BACKEND ENFORCEMENT: FREE PLAN CAN ONLY UPLOAD 2 TIMES TOTAL
+                if (userPlan === 'Free' && currentCredits <= 30) {
+                    qCount = Math.min(qCount, 10); // Force max 10 Qs for free users
+                    if (freeNotesAttempts >= 2) {
+                        throw new Error("FREE_UPLOAD_LIMIT_REACHED");
+                    }
+                    transaction.set(userRef, { freeNotesAttempts: freeNotesAttempts + 1 }, { merge: true });
                 }
 
                 let maxAllowedQs = 15; 
@@ -377,7 +390,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                 if (userPlan === 'Institute') maxAllowedQs = 150;
 
                 if (qCount > maxAllowedQs) {
-                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Upgrade to unlock more.`);
+                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test.`);
                 }
 
                 if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} but have ${currentCredits}.`);
@@ -410,8 +423,6 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         }
 
         const response = await generateAIContent(parts, true);
-        
-        // 🔥 SOLUTION: APPLYING THE SAFE JSON PARSER
         const quizArray = safeJSONParse(response.text);
 
         res.status(200).json({ success: true, quizArray, remainingCredits: finalRemainingCredits });
@@ -419,16 +430,17 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
     } catch (error) {
         console.error("🚨 Individual Generation Error:", error.message);
 
-        // Default Clean Message
         let cleanErrorMessage = "Oops! Something went wrong while generating the test. Please try again.";
         
-        // 1. BUSINESS LOGIC ERRORS (Tere purane errors jo user ko dikhne chahiye)
+        // 1. BUSINESS LOGIC ERRORS
         if (error.message === "GUEST_LIMIT_REACHED") {
             cleanErrorMessage = "Free trial exhausted for this device/IP. Please log in with Google to continue generating unlimited tests.";
+        } else if (error.message === "FREE_UPLOAD_LIMIT_REACHED") {
+            cleanErrorMessage = "Upload Limit Reached. You have used your 2 free Scan-to-Notes uploads. Upgrade your plan to continue uploading notes!";
         } else if (error.message.includes("Plan Limit") || error.message.includes("Insufficient credits") || error.message.includes("large")) {
             cleanErrorMessage = error.message; 
         } 
-        // 2. GOOGLE AI API ERRORS (Naya Smart Interceptor)
+        // 2. GOOGLE AI API ERRORS
         else if (error.message.includes("Quota exceeded") || error.message.includes("429")) {
             cleanErrorMessage = "Server is currently busy with high traffic. Please wait 1 minute and click generate again.";
         } else if (error.message.includes("503") || error.message.includes("overloaded")) {
@@ -439,7 +451,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             cleanErrorMessage = "Your notes contain restricted or unclear content. Please upload a clearer document.";
         }
 
-        // AUTO-REFUND MECHANIC (Only refund if it wasn't a guest error or validation error)
+        // AUTO-REFUND MECHANIC
         if (userId !== 'guest_user' && creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -447,7 +459,13 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                     const userDoc = await transaction.get(userRef);
                     if (userDoc.exists) {
                         let currentCredits = Number(userDoc.data().credits || 0);
-                        transaction.set(userRef, { credits: currentCredits + requiredCredits }, { merge: true });
+                        // Also revert the free attempt count if AI failed
+                        let freeNotesAttempts = Number(userDoc.data().freeNotesAttempts || 0);
+                        let updates = { credits: currentCredits + requiredCredits };
+                        if (userDoc.data().plan === 'Free' && freeNotesAttempts > 0) {
+                            updates.freeNotesAttempts = freeNotesAttempts - 1;
+                        }
+                        transaction.set(userRef, updates, { merge: true });
                         console.log(`♻️ Auto-refunded ${requiredCredits} credits to user ${userId}`);
                     }
                 });
@@ -456,11 +474,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
             }
         }
 
-        // 🔥 THE MAIN FIX: Raw 'error.message' ki jagah cleanErrorMessage bhej rahe hain
-        res.status(500).json({ 
-            success: false, 
-            error: cleanErrorMessage 
-        });
+        res.status(500).json({ success: false, error: cleanErrorMessage });
     }
 });
 
@@ -475,9 +489,11 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
     try {
         let { targetExam, subject, chapter, difficulty, questionCount, board, stream, medium } = req.body;
-        const qCount = Number(questionCount) || 10;
+        let qCount = Number(questionCount) || 10;
+
+        // BACKEND LIMIT ENFORCEMENT
+        if (userId === 'guest_user') qCount = Math.min(qCount, 10);
         
-        // Hindi Auto-Detect for BSEB
         if (!medium && (board === 'Bihar Board' || board === 'BSEB (Bihar Board)' || targetExam === 'Bihar Board')) {
             medium = 'Hindi'; 
         }
@@ -508,6 +524,11 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                     if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
                 }
 
+                // BACKEND ENFORCEMENT: FREE PLAN LIMIT
+                if (userPlan === 'Free' && currentCredits <= 30) {
+                    qCount = Math.min(qCount, 15);
+                }
+
                 let maxAllowedQs = 15; 
                 if (userPlan === 'Pro') maxAllowedQs = 25;
                 if (userPlan === 'Elite') maxAllowedQs = 60;
@@ -524,7 +545,6 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
         const streamContext = stream ? `Stream: ${stream}. ` : "";
         
-        // Clean & Centralized Prompt
         const prompt = `You are an elite expert question paper setter.
         YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", focusing on the topic "${chapter}".
         
@@ -561,6 +581,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         res.status(500).json({ success: false, error: errorMessage });
     }
 });
+
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads, AI, Refund & SK Code) 🔥
 // =======================================================================
@@ -598,7 +619,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} to generate this group test.`);
             transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
         });
-        creditsDeducted = true; // Mark as deducted so we can refund if AI fails
+        creditsDeducted = true; 
 
         // 🧠 2. GENERATE PROMPT
         let prompt = "";
@@ -630,10 +651,10 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         const response = await generateAIContent(parts, true);
         const quizArray = safeJSONParse(response.text);
 
-        // 🎟️ 4. GENERATE "SK" CODE (No Hyphens, Starts with SK, Pure Alphanumeric)
+        // 🎟️ 4. GENERATE "SK" CODE
         const safeName = xss(className).trim();
-        const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 random chars
-        const generatedCode = `SK${randomHex}`; // Output e.g., SK8B2F9A
+        const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase(); 
+        const generatedCode = `SK${randomHex}`; 
         
         const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
 
@@ -657,7 +678,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
     } catch (error) {
         console.error("🚨 Class Creation Error:", error);
 
-        // ♻️ AUTO-REFUND MECHANIC (Only refund if credits were actually deducted)
+        // ♻️ AUTO-REFUND MECHANIC
         if (creditsDeducted) {
             try {
                 const userRef = db.collection('users').doc(userId);
@@ -677,6 +698,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         res.status(500).json({ success: false, error: error.message || "Failed to generate class. Check files." });
     }
 });
+
 // =======================================================================
 // 🔥 3. STUDENT JOINS A CLASS (Verify Code) 🔥
 // =======================================================================
@@ -791,6 +813,7 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
         res.status(500).json({ success: false, error: "Server error." });
     }
 });
+
 // =======================================================================
 // 🔥 6. STUDENT LEADERBOARD (TOP 10 + USER RANK) 🔥
 // =======================================================================
@@ -838,6 +861,7 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
+
 // =======================================================================
 // 🔥 7. RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING) 🔥
 // =======================================================================
@@ -851,9 +875,7 @@ app.post('/api/v1/create-order', async (req, res) => {
         const options = {
             amount: amount * 100, 
             currency: "INR",
-            // Prefix added for easy tracking in Razorpay Dashboard
             receipt: `QUIZ_${req.user.uid.substring(0, 5)}_${Date.now()}`,
-            // Custom notes to separate Quiz money from DDH ecommerce money
             notes: {
                 business: "NotesToQuiz",
                 userEmail: req.user.email
@@ -902,7 +924,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             
             transaction.set(userRef, { 
                 credits: currentCredits + added,
-                plan: upgradedPlan // 🔥 Saves the new plan to DB
+                plan: upgradedPlan 
             }, { merge: true });
         });
 
