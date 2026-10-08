@@ -208,8 +208,10 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
         mediumText = "CRITICAL LANGUAGE RULE: Questions, options, and explanations MUST be entirely in PURE HINDI (Devanagari). However, strictly retain all technical Math/Science formulas in English LaTeX enclosed in '$'. DO NOT translate math variables to Hindi.";
     }
 
-    // 🔥 This fix ensures no syntax error crash occurs during template string evaluation
-    return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject \vert{}\vert{} 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
+    // 🔥 100% BULLETPROOF STRING FIX (No || operators inside template string)
+    const finalTarget = academicLevel ? academicLevel : 'Competitive Test';
+    const finalSub = subject ? subject : 'General';
+    return `Target Exam: ${finalTarget} - Subject: ${finalSub}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
 
 const strictNegativeRules = `
@@ -275,7 +277,6 @@ app.post('/api/v1/support-ticket', async (req, res) => {
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // 💡 Pro-Tip: You can later add Nodemailer here to send an email to yourself
         res.status(200).json({ success: true, message: 'Ticket received securely.' });
     } catch (error) {
         console.error("Support Ticket Error:", error);
