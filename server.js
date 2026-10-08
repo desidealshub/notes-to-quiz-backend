@@ -91,7 +91,7 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_SECRET || 'dummysecret'
 });
 
-// 🔥 GEMINI AI SDK SETUP (MULTI-KEY FALLBACK ADDED HERE) 🔥
+// 🔥 GEMINI AI SDK SETUP (MULTI-KEY FALLBACK) 🔥
 const { GoogleGenAI } = require('@google/genai');
 const rawKeys = process.env.GEMINI_API_KEY || 'dummykey';
 const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k);
@@ -166,31 +166,28 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
     const target = academicLevel ? academicLevel.toLowerCase() : "";
     const sub = subject ? subject.toLowerCase() : "";
 
-    // 🚨 1. EXAM & SUBJECT SPECIFIC TONE 🚨
+    // 🚨 1. EXAM & SUBJECT SPECIFIC TONE (EXTREME STRICTNESS) 🚨
     if (target === 'jee_adv') {
-        examStyle = `🚨 JEE ADVANCED MODE: Generate highly complex, multi-layered comprehension-style paragraphs. For ${subject}, intertwine 2-3 distinct advanced chapters. Force the student to solve for hidden variables before the main calculation. Options should be abstract expressions. Requires rigorous mathematical steps.`;
+        examStyle = `🚨 JEE ADVANCED MODE (EXTREME DIFFICULTY): Generate exceptionally complex, multi-layered questions. 
+        - You MUST intertwine 2-3 advanced concepts from different chapters in a single question. 
+        - Include a mix of Single Choice (type: "single"), Multiple Correct (type: "multiple"), and Integer Type (type: "integer").
+        - Force the student to perform heavy derivations, rigorous mathematical steps, and solve for hidden variables. DO NOT ask direct formula-based questions. Options should be abstract expressions.`;
     } else if (target === 'jee_mains') {
-        examStyle = `🚨 JEE MAINS MODE: Generate tricky, speed-breaker numericals mirroring NTA 2024 patterns. For ${subject}, focus on calculation traps, edge cases in formulas, and algebraic manipulations.`;
+        examStyle = `🚨 JEE MAINS MODE: Generate tricky, speed-breaker numericals mirroring NTA 2024 patterns. 
+        - Include a mix of Single Choice (type: "single") and Integer Type (type: "integer") questions.
+        - Focus on calculation traps, edge cases in formulas, and algebraic manipulations.`;
     } else if (target === 'neet') {
         if (sub.includes('physics')) {
-            examStyle = `🚨 NEET PHYSICS MODE: Focus on formula application, conceptual tricks, and speed. Avoid lengthy calculus. Use assertion-reasoning or statement-based questions.`;
+            examStyle = `🚨 NEET PHYSICS MODE: Focus on conceptual traps and speed. Use assertion-reasoning or statement-based questions. Type must be "single".`;
         } else if (sub.includes('biology') || sub.includes('botany') || sub.includes('zoology')) {
-            examStyle = `🚨 NEET BIOLOGY MODE: Focus on deep NCERT line-by-line factual recall, matching lists, and assertion-reasoning.`;
+            examStyle = `🚨 NEET BIOLOGY MODE: Focus on deep NCERT line-by-line factual recall, matching lists, and assertion-reasoning. Type must be "single".`;
         } else {
-            examStyle = `🚨 NEET MODE: Focus on speed, factual accuracy, and direct conceptual application mirroring NTA NEET patterns.`;
+            examStyle = `🚨 NEET MODE: Focus on speed, factual accuracy, and direct conceptual application mirroring NTA patterns. Type must be "single".`;
         }
     } else if (target === 'ssc' || target === 'banking' || target === 'railway' || target === 'bihar_police') {
-        if (sub.includes('math') || sub.includes('aptitude') || sub.includes('quant')) {
-            examStyle = `🚨 COMPETITIVE QUANT MODE: Focus on arithmetic shortcuts, percentages, time-speed-distance, and geometry tricks. Use tricky distractors that match common calculation errors.`;
-        } else if (sub.includes('reasoning') || sub.includes('intelligence')) {
-            examStyle = `🚨 REASONING MODE: Focus on deep logical puzzles, syllogisms, and coding-decoding.`;
-        } else if (sub.includes('english')) {
-            examStyle = `🚨 ENGLISH COMPREHENSION MODE: Focus on complex spotting errors, idioms, and vocabulary.`;
-        } else {
-            examStyle = `🚨 GK/AWARENESS MODE: Focus on exact dates, articles of the constitution, recent events, or specific historical facts.`;
-        }
+        examStyle = `🚨 COMPETITIVE EXAM MODE: Focus on tricky distractors, arithmetic shortcuts, logic puzzles, or highly specific GK facts. Type must be "single".`;
     } else if (target === 'class12' || target === 'class10') {
-        examStyle = `🚨 BOARD EXAM MODE (${board || 'CBSE'}): Mirror the exact pattern of board exams. Use case-study based questions, assertion-reasoning, and standard conceptual proofs.`;
+        examStyle = `🚨 BOARD EXAM MODE (${board || 'CBSE'}): Mirror the exact pattern of board exams. Use case-study based questions and standard conceptual proofs. Type must be "single".`;
     } else {
         examStyle = `🚨 COMPETITIVE MODE: Adapt strictly to the ${academicLevel} standard for${subject}.`;
     }
@@ -198,51 +195,47 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
     // 🚨 2. DIFFICULTY SCALING 🚨
     let diffRules = "";
     if (difficulty.toLowerCase() === 'hard') {
-        diffRules = `🔥 DIFFICULTY: HARD. DO NOT ask single-step or direct formula questions. Make the scenario complex. Mix multiple concepts. Hide direct data and make the student derive it first.`;
-    } else if (difficulty.toLowerCase() === 'easy') {
-        diffRules = `Difficulty: Easy. Focus on fundamental concepts, direct definitions, and basic formula applications.`;
+        diffRules = `🔥 DIFFICULTY: HARD. DO NOT ask single-step questions. Make the scenario complex. Hide direct data and make the student derive it first.`;
     } else {
-        diffRules = `Difficulty: Medium. Standard previous year question level with moderate calculations.`;
+        diffRules = `Difficulty: ${difficulty}. Standard previous year question level.`;
     }
 
     // 🚨 3. LANGUAGE INSTRUCTION 🚨
     let mediumText = "";
     if (sub.includes("english") || medium === "English") {
-        mediumText = "CRITICAL LANGUAGE RULE: Entire output (questions, options, explanations) MUST be in PROFESSIONAL ENGLISH.";
+        mediumText = "CRITICAL LANGUAGE RULE: Entire output MUST be in PROFESSIONAL ENGLISH.";
     } else if (medium === "Hindi") {
-        mediumText = "CRITICAL LANGUAGE RULE: The questions, options (A,B,C,D), and explanations MUST be entirely in PURE HINDI (Devanagari script). However, strictly retain all technical Math/Science formulas, variables, and equations in English LaTeX enclosed in '$'. DO NOT translate math variables to Hindi.";
+        mediumText = "CRITICAL LANGUAGE RULE: Questions, options, and explanations MUST be entirely in PURE HINDI (Devanagari). However, strictly retain all technical Math/Science formulas in English LaTeX enclosed in '$'. DO NOT translate math variables to Hindi.";
     }
 
+    // 🔥 This fix ensures no syntax error crash occurs during template string evaluation
     return `Target Exam: ${academicLevel || 'Competitive Test'} | Subject: ${subject \vert{}\vert{} 'General'}\n${examStyle}\n${diffRules}\n${mediumText}`;
 }
 
-// 🔥 SOLUTION: SMART MATH/LANGUAGE FORMATTING, NO STARS, STEP-BY-STEP EXPLANATION, NO JSON CRASH
 const strictNegativeRules = `
-⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE (DO NOT BREAK THESE):
-1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct. Do NOT hallucinate.
-2. 📅 DEEP DATA & PYQ INTEGRATION: Ask highly specific questions mirroring official exams.
-3. 🚫 NO META-QUESTIONS: NEVER reference the notes themselves.
-4. 🔥 PLAUSIBLE DISTRACTORS: Incorrect options MUST be common student mistakes.
-5. 🧮 SMART FORMATTING (CRITICAL PREVENT CRASH): 
-   - ⚠️ IF the subject is Math, Physics, Chemistry, or Science: You MUST use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and formulas (e.g., $\\frac{1}{2}$). DO NOT use double '$$'. Avoid using single quotes in math (use ^\\prime instead).
-   - 🚨 CRITICAL FOR OPTIONS: Any fraction, equation, or math variable inside the options (A, B, C, D) MUST ALWAYS be wrapped in '$' signs (e.g., "A": "$\\frac{500}{7}$"). NEVER output naked LaTeX without '$' signs.
-   - ⚠️ IF the subject is a Language (Hindi, English, Sanskrit) or Humanities (History, Polity): DO NOT use LaTeX '$' signs. Output normal plain text with standard punctuation.
-6. ⚡ EXPLANATION DEPTH & FORMATTING RULE: 
-   - Keep options (A, B, C, D) EXTREMELY SHORT AND CRISP.
-   - Provide a HIGHLY DETAILED, step-by-step logical proof or reasoning in the 'explanation' field. 
-   - 🚨 YOU MUST insert the exact HTML tag <br><br> between every single step or paragraph to force line breaks in the UI. DO NOT write a single dense paragraph.
-7. ❌ ABSOLUTELY NO MARKDOWN FORMATTING IN TEXT: 
-   - NEVER use asterisks (**) or underscores (__) for bolding or emphasis. Just use plain text. DO NOT use markdown code blocks inside the explanation.
-8. WARNING: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text.
-9. 🚨 NO HTML ENTITIES: NEVER use HTML codes like &gt;, &lt;, or &#39;. Always use raw symbols (<, >, ') directly in your text.`;
+⚠️ STRICT NEGATIVE RULES & QUALITY ASSURANCE:
+1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct.
+2. 🧮 SMART FORMATTING: Use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and fractions (e.g., $\\frac{1}{2}$). 
+3. 🚨 CRITICAL FOR OPTIONS: Any fraction, equation, or math variable inside the options (A, B, C, D) MUST ALWAYS be wrapped in '$' signs.
+4. ⚡ EXPLANATION: Provide a HIGHLY DETAILED, step-by-step logical proof. YOU MUST insert the exact HTML tag <br><br> between every single step.
+5. ❌ NO MARKDOWN IN TEXT: NEVER use asterisks (**) or underscores (__) for bolding.
+6. 🔢 INTEGER QUESTIONS: If type is "integer", the 'correctAnswer' MUST be a strict whole number string (e.g., "4", "45") using ONLY numerical digits (0-9). DO NOT include signs, decimals, variables, or words.
+7. 📊 MATCH THE COLUMNS: If a question is "Match the following", you MUST format the columns vertically using <br> or standard spacing in the 'question' field. DO NOT output it as a single messy paragraph.
+8. 🚨 CRITICAL JSON RULE: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text. Start exactly with '[' and end with ']'.`;
 
-// 🔥 SOLUTION: BULLETPROOF MATH & JSON PARSER
+// 🔥 THE ULTIMATE JSON PARSER (FIXES ALL MARKDOWN BUGS)
 function safeJSONParse(str) {
     try {
         return JSON.parse(str);
     } catch (e) {
         try {
+            // Aggressively strip Markdown and any text outside the JSON array
             let cleanStr = str.replace(/```json/gi, '').replace(/```/gi, '').trim();
+            const firstBracket = cleanStr.indexOf('[');
+            const lastBracket = cleanStr.lastIndexOf(']');
+            if (firstBracket !== -1 && lastBracket !== -1) {
+                cleanStr = cleanStr.substring(firstBracket, lastBracket + 1);
+            }
             cleanStr = cleanStr.replace(/\\(?!["\\/bfnrt])/g, "\\\\"); 
             return JSON.parse(cleanStr);
         } catch (fatalError) {
@@ -251,7 +244,6 @@ function safeJSONParse(str) {
         }
     }
 }
-
 
 // ==========================================
 // --- API ROUTES ---
@@ -330,12 +322,12 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
     try {
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        const { subject, questionCount, academicLevel } = config;
+        const { subject, questionCount, academicLevel, difficulty } = config;
         
         let qCount = Number(questionCount) || 10;
         
         // BACKEND LIMIT ENFORCEMENT
-        if (userId === 'guest_user') qCount = Math.min(qCount, 5); // Guest strict 5 limit
+        if (userId === 'guest_user') qCount = Math.min(qCount, 5);
 
         requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
         let finalRemainingCredits = "Skipped (Guest)";
@@ -377,7 +369,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
                 // 🚨 BACKEND ENFORCEMENT: FREE PLAN CAN ONLY UPLOAD 2 TIMES TOTAL
                 if (userPlan === 'Free' && currentCredits <= 30) {
-                    qCount = Math.min(qCount, 10); // Force max 10 Qs for free users
+                    qCount = Math.min(qCount, 10);
                     if (freeNotesAttempts >= 2) {
                         throw new Error("FREE_UPLOAD_LIMIT_REACHED");
                     }
@@ -404,11 +396,22 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         const finalSubject = (subject && subject.trim() !== "") ? subject : "Auto-Detected";
         
         const prompt = `You are a ruthless and expert academic examiner. Analyze the attached image/file carefully. 
-        YOUR TASK: Extract the core TOPICS, FORMULAS, and CONCEPTS from these notes. Then, generate exactly ${qCount} Multiple Choice Questions (MCQs) testing those specific concepts.
+        YOUR TASK: Extract the core TOPICS, FORMULAS, and CONCEPTS from these notes. Then, generate exactly ${qCount} highly rigorous questions testing those specific concepts.
         Subject context: "${finalSubject}"
         
-        ${buildExamPersona(academicLevel, null, null, null, finalSubject)}
-        ${strictNegativeRules}`;
+        ${buildExamPersona(academicLevel, null, null, null, finalSubject, difficulty)}
+        ${strictNegativeRules}
+        
+        CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure: 
+        [ 
+          { 
+            "type": "single", // Can be "single", "multiple" (for multiple correct), or "integer".
+            "question": "Question text here...", 
+            "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, // If type is "integer", leave options as empty object {}
+            "correctAnswer": "A", // If type is "multiple", use comma-separated like "A,C". If "integer", use a whole number string like "4" using 0-9 digits only.
+            "explanation": "Detailed step-by-step logic<br><br>Next step..." 
+          } 
+        ]`;
         
         const parts = [{ text: prompt }];
         let totalSize = 0;
@@ -459,7 +462,6 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                     const userDoc = await transaction.get(userRef);
                     if (userDoc.exists) {
                         let currentCredits = Number(userDoc.data().credits || 0);
-                        // Also revert the free attempt count if AI failed
                         let freeNotesAttempts = Number(userDoc.data().freeNotesAttempts || 0);
                         let updates = { credits: currentCredits + requiredCredits };
                         if (userDoc.data().plan === 'Free' && freeNotesAttempts > 0) {
@@ -546,12 +548,21 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         const streamContext = stream ? `Stream: ${stream}. ` : "";
         
         const prompt = `You are an elite expert question paper setter.
-        YOUR TASK: Generate exactly ${qCount} Multiple Choice Questions (MCQs) for the subject "${subject}", focusing on the topic "${chapter}".
+        YOUR TASK: Generate exactly ${qCount} Multiple Choice/Numerical Questions for the subject "${subject}", focusing on the topic "${chapter}".
         
         ${buildExamPersona(targetExam, board, streamContext, medium, subject, difficulty || 'medium')}
         ${strictNegativeRules}
         
-        Return ONLY a JSON array of objects strictly matching this schema: [ { "question": "Question text", "options": { "A": "Opt1", "B": "Opt2", "C": "Opt3", "D": "Opt4" }, "correctAnswer": "A", "explanation": "Detailed step-by-step mathematical/logical explanation proving why the answer is correct." } ]`;
+        CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure: 
+        [ 
+          { 
+            "type": "single", // Can be "single", "multiple" (for multiple correct), or "integer".
+            "question": "Question text here...", 
+            "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, // If type is "integer", leave options as empty object {}
+            "correctAnswer": "A", // If type is "multiple", use comma-separated like "A,C". If "integer", use a whole number string like "4" using 0-9 digits only.
+            "explanation": "Detailed step-by-step logic<br><br>Next step..." 
+          } 
+        ]`;
         
         const parts = [{ text: prompt }];
         const response = await generateAIContent(parts, true);
@@ -628,12 +639,12 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             CRITICAL INSTRUCTION: You MUST extract exactly ${qCount} questions from the paper, and you MUST assign the correct answer EXACTLY as provided in the uploaded Answer Key. 
             DO NOT use your own AI knowledge to solve the questions. ONLY follow the teacher's uploaded answer key. If an explanation is missing, write "Answer per official key."
             WARNING: DO NOT use markdown formatting inside JSON. 
-            Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
+            Return ONLY a raw JSON array: [ { "type": "single", "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
         } else {
             prompt = `You are an expert academic examiner. Analyze the attached study notes/files. 
             Generate exactly ${qCount} multiple choice questions (MCQs) STRICTLY based on this content. 
             ${strictNegativeRules}
-            Return ONLY a raw JSON array: [ { "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
+            Return ONLY a raw JSON array: [ { "type": "single", "question": "Q", "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, "correctAnswer": "A", "explanation": "Exp" } ]`;
         }
 
         const parts = [{ text: prompt }];
