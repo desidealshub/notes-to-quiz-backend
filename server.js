@@ -330,7 +330,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
         // BACKEND LIMIT ENFORCEMENT
         if (userId === 'guest_user') qCount = Math.min(qCount, 5);
 
-        requiredCredits = Math.max(3, Math.ceil(qCount * 0.5));
+        requiredCredits = Math.max(5, Math.ceil(qCount * 2));
         let finalRemainingCredits = "Skipped (Guest)";
 
         // 🔥 GUEST LOGIC (IP ADDRESS FINGERPRINTING)
@@ -501,7 +501,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             medium = 'Hindi'; 
         }
 
-        requiredCredits = Math.max(2, Math.ceil(qCount * 0.4)); 
+        requiredCredits = Math.max(5, Math.ceil(qCount * 1)); 
         let finalRemainingCredits = "Skipped (Guest)";
 
         if (userId === 'guest_user') {
@@ -618,7 +618,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         const qCount = Number(questionCount) || 15;
-        requiredCredits = Math.max(5, Math.ceil(qCount * 0.5));
+        requiredCredits = Math.max(20, Math.ceil(qCount * 1));
         
         // 💰 1. DEDUCT CREDITS FIRST
         const userRef = db.collection('users').doc(userId);
@@ -919,11 +919,11 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        // 🔥 DYNAMIC PLAN UPGRADE MAPPING 🔥
+        // 🔥 DYNAMIC PLAN UPGRADE MAPPING (New Profitable Limits) 🔥
         let upgradedPlan = 'Starter';
         const added = Number(creditsToAdd);
-        if (added >= 300 && added < 750) upgradedPlan = 'Pro';
-        else if (added >= 750 && added < 2000) upgradedPlan = 'Elite';
+        if (added >= 250 && added < 600) upgradedPlan = 'Pro';
+        else if (added >= 600 && added < 2000) upgradedPlan = 'Elite';
         else if (added >= 2000) upgradedPlan = 'Institute';
 
         const userRef = db.collection('users').doc(req.user.uid);
