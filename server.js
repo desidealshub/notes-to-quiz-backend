@@ -184,14 +184,21 @@ function buildExamPersona(academicLevel, board = null, stream = null, medium = n
         } else {
             examStyle = `🚨 NEET MODE: Focus on speed, factual accuracy, and direct conceptual application mirroring NTA patterns. Type must be "single".`;
         }
-    } else if (target === 'ssc' || target === 'banking' || target === 'railway' || target === 'bihar_police') {
-        examStyle = `🚨 COMPETITIVE EXAM MODE: Focus on tricky distractors, arithmetic shortcuts, logic puzzles, or highly specific GK facts. Type must be "single".`;
+        } else if (target === 'ssc' || target === 'banking' || target === 'railway' || target === 'bihar_police') {
+        let quantOverride = "";
+        if (sub.includes('math') || sub.includes('aptitude') || sub.includes('quant')) {
+            quantOverride = `\n⚠️ QUANTITATIVE APTITUDE LATEX OVERRIDE: Write simple numbers, percentages (e.g., 20%), currency (₹500), and ratios (3:4) as PLAIN TEXT. DO NOT wrap them in '$'. ONLY use '$...$' for actual algebra, variables, or complex fractions. NEVER use '&' or '{}' in plain text.`;
+        }
+        examStyle = `🚨 COMPETITIVE EXAM MODE: Focus on tricky distractors, arithmetic shortcuts, logic puzzles, or highly specific GK facts. Type must be "single".` + quantOverride;
     } else if (target === 'class12' || target === 'class10') {
         examStyle = `🚨 BOARD EXAM MODE (${board || 'CBSE'}): Mirror the exact pattern of board exams. Use case-study based questions and standard conceptual proofs. Type must be "single".`;
     } else {
         examStyle = `🚨 COMPETITIVE MODE: Adapt strictly to the ${academicLevel} standard for${subject}.`;
     }
-
+    // 👇🔥 यहाँ पर तेरा MISCELLANEOUS वाला लॉजिक आएगा 🔥👇
+    if (sub.includes('miscellaneous') || sub.includes('mix')) {
+        examStyle += `\n🔥 MISCELLANEOUS / FULL MOCK MODE: Mix questions from completely different chapters and topics of the syllabus unpredictably. Test the student's ability to switch concepts quickly. Strict adherence to the requested difficulty level.`;
+    }
     // 🚨 2. DIFFICULTY SCALING 🚨
     let diffRules = "";
     if (difficulty.toLowerCase() === 'hard') {
