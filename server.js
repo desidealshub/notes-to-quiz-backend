@@ -634,7 +634,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        const { className, duration, expiryHours, requireBatch, mode, questionCount, maxStudents } = config;
+        const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents } = config;
         const capacity = Number(maxStudents) || 50;
 
         if (!className || !duration || Number(duration) < 5) {
@@ -706,6 +706,8 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             instructorName: req.user.name,
             duration: Number(duration),
             requireBatch: Boolean(requireBatch),
+            requireRoll: Boolean(requireRoll),
+            requirePhone: Boolean(requirePhone),
             maxStudents: capacity, // 🔥 YAHAN ADD KIYA 🔥
             expiresAt: expiresAt,
             quizData: quizArray, 
@@ -780,6 +782,8 @@ app.post('/api/v1/verify-class', async (req, res) => {
                 instructorEmail: group.instructorEmail,
                 duration: group.duration,
                 requireBatch: group.requireBatch,
+                requireRoll: group.requireRoll,
+                requirePhone: group.requirePhone,
                 quizData: group.quizData 
             }
         });
