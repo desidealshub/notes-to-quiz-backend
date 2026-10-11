@@ -973,6 +973,59 @@ app.post('/api/v1/verify-payment', async (req, res) => {
     }
 });
 
+// =======================================================================
+// 🔥 9. KICK STUDENT FROM GROUP TEST (FREE UP SEAT) 🔥
+// =======================================================================
+app.post('/api/v1/kick-student', async (req, res) => {
+    try {
+        // 1. Check if the user is a logged-in teacher
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized. Please log in." });
+        }
+
+        const { classCode, studentId } = req.body;
+        if (!classCode || !studentId) {
+            return res.status(400).json({ success: false, error: "Missing details." });
+        }
+
+        const safeCode = xss(classCode.trim().toUpperCase());
+        const safeStudentId = xss(studentId.trim());
+
+        // 2. Verify if this teacher actually owns this class
+        const classDoc = await db.collection('LiveExams').doc(safeCode).get();
+        if (!classDoc.exists || classDoc.data().instructorUid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Access Denied. You do not own this class." });
+        }
+
+        // 3. Find the student's result in the 'history' collection
+        const historySnapshot = await db.collection('history')
+            .where('groupCode', '==', safeCode)
+            .get();
+
+        let docToDelete = null;
+
+        historySnapshot.forEach(doc => {
+            const data = doc.data();
+            if (doc.id === safeStudentId || data.userId === safeStudentId || (data.candidateDetails && data.candidateDetails.name === safeStudentId)) {
+                docToDelete = doc.id;
+            }
+        });
+
+        if (!docToDelete) {
+            return res.status(404).json({ success: false, error: "Student result not found in database." });
+        }
+
+        // 4. Delete that student's record permanently (Seat Freed!)
+        await db.collection('history').doc(docToDelete).delete();
+
+        res.status(200).json({ success: true, message: "Student kicked successfully. Seat freed." });
+
+    } catch (error) {
+        console.error("🚨 Kick Student Error:", error);
+        res.status(500).json({ success: false, error: "Server error while removing student." });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Production Server running on port ${PORT}`);
