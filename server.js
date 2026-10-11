@@ -846,9 +846,11 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
             const data = doc.data();
             totalScoreSum += data.score;
             studentResults.push({
+                docId: doc.id, // 🔥 Kick button ke liye jaruri hai
                 name: data.candidateDetails?.name || "Unknown",
                 rollNo: data.candidateDetails?.rollNo || "N/A",
                 batch: data.candidateDetails?.batchTime || "N/A",
+                phone: data.candidateDetails?.phone || "N/A", // 🔥 YAHAN PHONE ADD KIYA HAI 🔥
                 score: data.score,
                 timeTaken: data.time || "Unknown",
                 submittedAt: data.createdAt ? (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : data.createdAt) : null,
