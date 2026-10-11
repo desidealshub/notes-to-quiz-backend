@@ -634,7 +634,8 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        const { className, duration, expiryHours, requireBatch, mode, questionCount } = config;
+        const { className, duration, expiryHours, requireBatch, mode, questionCount, maxStudents } = config;
+        const capacity = Number(maxStudents) || 50;
 
         if (!className || !duration || Number(duration) < 5) {
             return res.status(400).json({ success: false, error: "Invalid class details." });
@@ -705,6 +706,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             instructorName: req.user.name,
             duration: Number(duration),
             requireBatch: Boolean(requireBatch),
+            maxStudents: capacity, // 🔥 YAHAN ADD KIYA 🔥
             expiresAt: expiresAt,
             quizData: quizArray, 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -754,6 +756,20 @@ app.post('/api/v1/verify-class', async (req, res) => {
 
         if (Date.now() > group.expiresAt) {
             return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
+        }
+
+        // 🛑 2. THE BOUNCER: CHECK MAX CAPACITY 🛑
+        const countSnapshot = await db.collection('history').where('groupCode', '==', safeCode).count().get();
+        const currentStudentCount = countSnapshot.data().count;
+
+        // 🔥 Ab database se capacity nikalega (agar purana test hai to default 50 manega)
+        const MAX_SEATS = group.maxStudents || 50; 
+                
+        if (currentStudentCount >= MAX_SEATS) {
+            return res.status(403).json({ 
+                success: false, 
+                error: `🚨 CLASS FULL! Maximum ${MAX_SEATS} students allowed. If someone cheated, ask your teacher to remove them first.` 
+            });
         }
 
         res.status(200).json({ 
