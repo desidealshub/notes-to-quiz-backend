@@ -4,6 +4,7 @@ const express = require('express');
 const Razorpay = require('razorpay');
 const cors = require('cors');
 const admin = require('firebase-admin');
+const nodemailer = require('nodemailer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
@@ -33,12 +34,20 @@ const db = admin.firestore();
 const app = express();
 app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
 
+// 🔥 NODEMAILER SETUP (NEW) 🔥
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
 // Configure multer for memory storage (Max 10MB per file)
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } 
 });
-
 // ==========================================
 // --- SECURITY & MIDDLEWARE CONFIGURATION ---
 // ==========================================
@@ -267,12 +276,12 @@ app.get('/api/ping', (req, res) => {
     res.status(200).send('PONG - Server is awake!');
 });
 
-// 🔥 NEW: SUPPORT TICKET SUBMISSION API
+// 🔥 NEW: SUPPORT TICKET SUBMISSION API (WITH EMAIL NOTIFICATION)
 app.post('/api/v1/support-ticket', async (req, res) => {
     try {
         const { uid, email, name, issueType, description, timestamp } = req.body;
         
-        // Save the ticket directly to Firebase Firestore
+        // 1. Save the ticket directly to Firebase Firestore
         await db.collection('SupportTickets').add({
             uid: xss(uid || 'guest'),
             email: xss(email || 'No Email'),
@@ -284,10 +293,20 @@ app.post('/api/v1/support-ticket', async (req, res) => {
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        res.status(200).json({ success: true, message: 'Ticket received securely.' });
+        // 2. Shoot Email Notification to Yourself
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: process.env.EMAIL_USER, // Tere hi email par aayega
+            subject: `🚨 New Support Ticket: ${xss(issueType)}`,
+            text: `New Ticket Details:\n\nName: ${xss(name || 'Guest')}\nEmail: ${xss(email || 'No Email')}\nIssue Type: ${xss(issueType)}\n\nDescription:\n${xss(description)}`
+        };
+
+        await transporter.sendMail(mailOptions);
+
+        res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
     } catch (error) {
         console.error("Support Ticket Error:", error);
-        res.status(500).json({ success: false, error: "Could not save the ticket." });
+        res.status(500).json({ success: false, error: "Could not save the ticket or send email." });
     }
 });
 
