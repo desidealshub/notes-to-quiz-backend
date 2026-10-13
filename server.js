@@ -795,28 +795,63 @@ app.post('/api/v1/verify-class', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 4. SAVE EXAM HISTORY & SEGREGATION 🔥
+// 🔥 4. SAVE EXAM HISTORY & SEGREGATION (ANTI-SPAM LOGIC) 🔥
 // =======================================================================
 app.post('/api/v1/save-history', async (req, res) => {
     try {
-        const { subject, score, total, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails } = req.body;
-        const activeUserId = req.user ? req.user.uid : 'guest_user';
+        const { id, subject, score, total, testType, groupCode, candidateDetails, quizData, userAnswers, flaggedQuestions, isReattempt } = req.body;
         
-        const docRef = await db.collection('history').add({
-            userId: xss(activeUserId),
-            subject: xss(subject || 'General'),
-            score: Number(score) || 0,
-            total: Number(total) || 0,
-            testType: xss(testType || 'individual'), 
-            groupCode: xss(groupCode || 'none'),     
-            candidateDetails: candidateDetails || null, 
-            quizData,
-            userAnswers: userAnswers || {},
-            flaggedQuestions: flaggedQuestions || [],
+        // अगर यूज़र लॉगिन नहीं है, तो उसे guest_user मान लो
+        const userId = req.user ? req.user.uid : 'guest_user';
+
+        // 1. बच्चे की पर्सनल हिस्ट्री में हमेशा सेव करो (ताकि उसे ऐप में दिखे)
+        // यह ग्लोबल कलेक्शन के बजाय अब यूज़र के पर्सनल फोल्डर में सेव होगा (Better Database Structure)
+        await db.collection('users').doc(userId).collection('history').doc(id).set({
+            ...req.body,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        res.status(200).json({ success: true, recordId: docRef.id });
+        // 2. 🔥 TEACHER ANALYTICS LOGIC (Sirf 1st Attempt) 🔥
+        if (testType === 'group_test' && groupCode && userId !== 'guest_user') {
+            const classRef = db.collection('classes').doc(groupCode);
+
+            // अगर Frontend कह रहा है कि ये Reattempt नहीं है...
+            if (isReattempt === false) {
+                
+                // ...तो Backend पर भी एक बार चेक कर लो (Double Security)
+                const classDoc = await classRef.get();
+                if (classDoc.exists) {
+                    const classData = classDoc.data();
+                    
+                    // चेक करो कि क्या यह userId पहले से students ऐरे (array) में है?
+                    const alreadyExists = classData.students && classData.students.some(s => s.userId === userId);
+
+                    // अगर बच्चा पहली बार दे रहा है, तभी लीडरबोर्ड में डालो!
+                    if (!alreadyExists) {
+                        const studentData = {
+                            docId: id, // Frontend में किक (Kick/Delete) करने के काम आएगा
+                            userId: userId,
+                            name: candidateDetails?.name || 'Unknown',
+                            rollNo: candidateDetails?.rollNo || 'N/A',
+                            phone: candidateDetails?.phone || 'N/A',
+                            batch: candidateDetails?.batchTime || 'N/A',
+                            score: Number(score) || 0,
+                            userAnswers: userAnswers || {},
+                            submittedAt: admin.firestore.FieldValue.serverTimestamp()
+                        };
+
+                        await classRef.update({
+                            students: admin.firestore.FieldValue.arrayUnion(studentData)
+                        });
+                        console.log(`✅ 1st Attempt recorded for ${studentData.name} in Class ${groupCode}`);
+                    } else {
+                        console.log(`🚫 Blocked Re-attempt spam by ${userId} in Class ${groupCode}`);
+                    }
+                }
+            }
+        }
+
+        res.status(200).json({ success: true, message: "History processed safely." });
     } catch (error) {
         console.error("🚨 Firestore History Error:", error);
         res.status(500).json({ success: false, error: error.message });
@@ -951,7 +986,7 @@ app.post('/api/v1/create-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 8. RAZORPAY PAYMENT VERIFICATION & PLAN UPGRADE 🔥
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION, PLAN UPGRADE & REFERRAL 🔥
 // =======================================================================
 app.post('/api/v1/verify-payment', async (req, res) => {
     try {
@@ -967,7 +1002,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        // 🔥 DYNAMIC PLAN UPGRADE MAPPING (New Profitable Limits) 🔥
+        // 🔥 DYNAMIC PLAN UPGRADE MAPPING 🔥
         let upgradedPlan = 'Starter';
         const added = Number(creditsToAdd);
         if (added >= 250 && added < 600) upgradedPlan = 'Pro';
@@ -975,26 +1010,46 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         else if (added >= 2000) upgradedPlan = 'Institute';
 
         const userRef = db.collection('users').doc(req.user.uid);
-        await db.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            let currentCredits = 0;
-            if (userDoc.exists && userDoc.data().credits !== undefined) {
-                currentCredits = Number(userDoc.data().credits);
+        const userDoc = await userRef.get();
+        const userData = userDoc.data() || {};
+        
+        let finalCreditsToAdd = added;
+        let bonusMessage = "";
+
+        // 🎁 REFER & EARN LOGIC (First Purchase Only) 🎁
+        if (userData.hasMadePurchase === false && userData.referredBy) {
+            finalCreditsToAdd += 50; // ख़रीदने वाले को 50 एक्स्ट्रा
+            bonusMessage = " (+50 Referral Bonus!)";
+
+            try {
+                // जिसने शेयर किया था, उसे 100 क्रेडिट्स भेज दो
+                const referrerRef = db.collection('users').doc(userData.referredBy);
+                await referrerRef.set({
+                    credits: admin.firestore.FieldValue.increment(100)
+                }, { merge: true });
+                console.log(`✅ 100 Credits auto-credited to Referrer: ${userData.referredBy}`);
+            } catch(e) {
+                console.error("⚠️ Referrer update failed:", e);
             }
-            
-            transaction.set(userRef, { 
-                credits: currentCredits + added,
-                plan: upgradedPlan 
-            }, { merge: true });
+        }
+
+        // 🔥 Update Buyer (Using FieldValue for 100% Accuracy) 🔥
+        await userRef.set({
+            credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
+            plan: upgradedPlan,
+            hasMadePurchase: true // 🛑 अब ये बोनस दोबारा नहीं लूट पाएगा
+        }, { merge: true });
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Payment verified. Upgraded to ${upgradedPlan}!${bonusMessage}` 
         });
 
-        res.status(200).json({ success: true, message: `Payment verified. Upgraded to ${upgradedPlan} Plan!` });
     } catch (error) {
         console.error("Payment Verification Error:", error);
         res.status(500).json({ success: false, error: "Failed to verify payment." });
     }
 });
-
 // =======================================================================
 // 🔥 9. KICK STUDENT FROM GROUP TEST (FREE UP SEAT) 🔥
 // =======================================================================
