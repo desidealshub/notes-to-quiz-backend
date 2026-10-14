@@ -795,63 +795,57 @@ app.post('/api/v1/verify-class', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 4. SAVE EXAM HISTORY & SEGREGATION (ANTI-SPAM LOGIC) 🔥
+// 🔥 4. SAVE EXAM HISTORY & SEGREGATION (100% ANALYTICS COMPATIBLE) 🔥
 // =======================================================================
 app.post('/api/v1/save-history', async (req, res) => {
     try {
-        const { id, subject, score, total, testType, groupCode, candidateDetails, quizData, userAnswers, flaggedQuestions, isReattempt } = req.body;
+        const { subject, score, total, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails, isReattempt } = req.body;
+        const activeUserId = req.user ? req.user.uid : 'guest_user';
         
-        // अगर यूज़र लॉगिन नहीं है, तो उसे guest_user मान लो
-        const userId = req.user ? req.user.uid : 'guest_user';
+        let finalTestType = xss(testType || 'individual');
+        let finalGroupCode = xss(groupCode || 'none');
 
-        // 1. बच्चे की पर्सनल हिस्ट्री में हमेशा सेव करो (ताकि उसे ऐप में दिखे)
-        // यह ग्लोबल कलेक्शन के बजाय अब यूज़र के पर्सनल फोल्डर में सेव होगा (Better Database Structure)
-        await db.collection('users').doc(userId).collection('history').doc(id).set({
-            ...req.body,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
+        // 🔥 FIRST ATTEMPT ONLY PROTECTION FOR GROUP TESTS 🔥
+        if (finalTestType === 'group_test' && finalGroupCode !== 'none') {
+            let alreadyAttempted = Boolean(isReattempt);
 
-        // 2. 🔥 TEACHER ANALYTICS LOGIC (Sirf 1st Attempt) 🔥
-        if (testType === 'group_test' && groupCode && userId !== 'guest_user') {
-            const classRef = db.collection('classes').doc(groupCode);
+            // Backend Double-Check: क्या इस userId ने पहले इस groupCode का टेस्ट दिया है?
+            if (!alreadyAttempted && activeUserId !== 'guest_user') {
+                const existingSnap = await db.collection('history')
+                    .where('groupCode', '==', finalGroupCode)
+                    .where('userId', '==', activeUserId)
+                    .limit(1)
+                    .get();
 
-            // अगर Frontend कह रहा है कि ये Reattempt नहीं है...
-            if (isReattempt === false) {
-                
-                // ...तो Backend पर भी एक बार चेक कर लो (Double Security)
-                const classDoc = await classRef.get();
-                if (classDoc.exists) {
-                    const classData = classDoc.data();
-                    
-                    // चेक करो कि क्या यह userId पहले से students ऐरे (array) में है?
-                    const alreadyExists = classData.students && classData.students.some(s => s.userId === userId);
-
-                    // अगर बच्चा पहली बार दे रहा है, तभी लीडरबोर्ड में डालो!
-                    if (!alreadyExists) {
-                        const studentData = {
-                            docId: id, // Frontend में किक (Kick/Delete) करने के काम आएगा
-                            userId: userId,
-                            name: candidateDetails?.name || 'Unknown',
-                            rollNo: candidateDetails?.rollNo || 'N/A',
-                            phone: candidateDetails?.phone || 'N/A',
-                            batch: candidateDetails?.batchTime || 'N/A',
-                            score: Number(score) || 0,
-                            userAnswers: userAnswers || {},
-                            submittedAt: admin.firestore.FieldValue.serverTimestamp()
-                        };
-
-                        await classRef.update({
-                            students: admin.firestore.FieldValue.arrayUnion(studentData)
-                        });
-                        console.log(`✅ 1st Attempt recorded for ${studentData.name} in Class ${groupCode}`);
-                    } else {
-                        console.log(`🚫 Blocked Re-attempt spam by ${userId} in Class ${groupCode}`);
-                    }
+                if (!existingSnap.empty) {
+                    alreadyAttempted = true;
                 }
+            }
+
+            // अगर यह 2nd/3rd Attempt है, तो इसे Teacher Analytics & Leaderboard से अलग कर दो!
+            if (alreadyAttempted) {
+                finalTestType = 'individual';
+                finalGroupCode = `reattempt_${finalGroupCode}`;
+                console.log(`🚫 Re-attempt filtered from Teacher Analytics for user: ${activeUserId}`);
             }
         }
 
-        res.status(200).json({ success: true, message: "History processed safely." });
+        // वापस तेरे असली 'history' कलेक्शन में सेव करो ताकि Teacher Analytics तुरंत डेटा दिखाए
+        const docRef = await db.collection('history').add({
+            userId: xss(activeUserId),
+            subject: xss(subject || 'General'),
+            score: Number(score) || 0,
+            total: Number(total) || 0,
+            testType: finalTestType, 
+            groupCode: finalGroupCode,     
+            candidateDetails: candidateDetails || null, 
+            quizData,
+            userAnswers: userAnswers || {},
+            flaggedQuestions: flaggedQuestions || [],
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        res.status(200).json({ success: true, recordId: docRef.id });
     } catch (error) {
         console.error("🚨 Firestore History Error:", error);
         res.status(500).json({ success: false, error: error.message });
