@@ -986,7 +986,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
     try {
         if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
         
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd } = req.body;
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd, phone } = req.body;
 
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -1014,7 +1014,6 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         if (userData.hasMadePurchase === false && userData.referredBy) {
             finalCreditsToAdd += 50; // ख़रीदने वाले को 50 एक्स्ट्रा
             bonusMessage = " (+50 Referral Bonus!)";
-
             try {
                 // जिसने शेयर किया था, उसे 100 क्रेडिट्स भेज दो
                 const referrerRef = db.collection('users').doc(userData.referredBy);
@@ -1022,26 +1021,29 @@ app.post('/api/v1/verify-payment', async (req, res) => {
                     credits: admin.firestore.FieldValue.increment(100)
                 }, { merge: true });
                 console.log(`✅ 100 Credits auto-credited to Referrer: ${userData.referredBy}`);
-            } catch(e) {
+            } catch (e) {
                 console.error("⚠️ Referrer update failed:", e);
             }
         }
 
-        // 🔥 Update Buyer (Using FieldValue for 100% Accuracy) 🔥
+        // 🔥 Update Buyer (Credits + Plan + Phone Number + Timestamp) 🔥
         await userRef.set({
             credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
             plan: upgradedPlan,
-            hasMadePurchase: true // 🛑 अब ये बोनस दोबारा नहीं लूट पाएगा
+            phone: xss(phone || userData.phone || ''), // 👈 यहाँ फोन नंबर सेव होगा
+            hasMadePurchase: true, // 🛑 अब ये बोनस दोबारा नहीं लूट पाएगा
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
         res.status(200).json({ 
             success: true, 
-            message: `Payment verified. Upgraded to ${upgradedPlan}!${bonusMessage}` 
+            message: `Payment verified! Added ${finalCreditsToAdd} credits${bonusMessage}`,
+            newPlan: upgradedPlan
         });
 
     } catch (error) {
-        console.error("Payment Verification Error:", error);
-        res.status(500).json({ success: false, error: "Failed to verify payment." });
+        console.error("🚨 Razorpay Verification Error:", error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 // =======================================================================
