@@ -854,6 +854,52 @@ app.post('/api/v1/save-history', async (req, res) => {
 });
 
 // =======================================================================
+// 🔥 4.B FETCH USER'S CLOUD EXAM HISTORY (MULTI-DEVICE SYNC) 🔥
+// =======================================================================
+app.get('/api/v1/my-history', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(200).json({ success: true, history: [] });
+        }
+
+        // यूज़र के UID से उसके सारे दिए हुए टेस्ट क्लाउड से निकालो
+        const snapshot = await db.collection('history')
+            .where('userId', '==', req.user.uid)
+            .limit(100)
+            .get();
+
+        let cloudHistory = [];
+        snapshot.forEach(doc => {
+            const d = doc.data();
+            const createdMs = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().getTime() : Date.now();
+            
+            cloudHistory.push({
+                id: doc.id,
+                subject: d.subject || 'Practice Test',
+                score: Number(d.score) || 0,
+                total: Number(d.total) || (Array.isArray(d.quizData) ? d.quizData.length : 10),
+                time: d.time || '00:00',
+                testType: d.testType || 'individual',
+                groupCode: d.groupCode || 'none',
+                date: new Date(createdMs).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                timestamp: createdMs,
+                quizData: d.quizData || [],
+                userAnswers: d.userAnswers || {},
+                flaggedQuestions: d.flaggedQuestions || []
+            });
+        });
+
+        // सबसे नए टेस्ट को सबसे ऊपर रखो (Newest First)
+        cloudHistory.sort((a, b) => b.timestamp - a.timestamp);
+
+        res.status(200).json({ success: true, history: cloudHistory });
+    } catch (error) {
+        console.error("🚨 Fetch Cloud History Error:", error);
+        res.status(500).json({ success: false, error: "Failed to sync history." });
+    }
+});
+
+// =======================================================================
 // 🔥 5. TEACHER ANALYTICS DASHBOARD (ULTRA-FAST PARALLEL + FIELD SELECT) 🔥
 // =======================================================================
 app.get('/api/v1/class-analytics/:code', async (req, res) => {
