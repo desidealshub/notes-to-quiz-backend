@@ -799,7 +799,7 @@ app.post('/api/v1/verify-class', async (req, res) => {
 // =======================================================================
 app.post('/api/v1/save-history', async (req, res) => {
     try {
-        const { subject, score, total, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails, isReattempt } = req.body;
+        const { subject, score, total, time, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails, isReattempt } = req.body;
         const activeUserId = req.user ? req.user.uid : 'guest_user';
         
         let finalTestType = xss(testType || 'individual');
@@ -836,6 +836,7 @@ app.post('/api/v1/save-history', async (req, res) => {
             subject: xss(subject || 'General'),
             score: Number(score) || 0,
             total: Number(total) || 0,
+            time: xss(time || '00:00'),
             testType: finalTestType, 
             groupCode: finalGroupCode,     
             candidateDetails: candidateDetails || null, 
@@ -853,72 +854,102 @@ app.post('/api/v1/save-history', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 5. TEACHER ANALYTICS DASHBOARD (SECURE FETCH WITH DETAILS) 🔥
+// 🔥 5. TEACHER ANALYTICS DASHBOARD (ULTRA-FAST PARALLEL + FIELD SELECT) 🔥
 // =======================================================================
 app.get('/api/v1/class-analytics/:code', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
-
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized." });
+        }
+        
         const classCode = xss(req.params.code.trim().toUpperCase());
-        const classDoc = await db.collection('LiveExams').doc(classCode).get();
-        if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class code not found." });
+
+        // ⚡ SPEED BOOST 1 & 2: दोनों डेटाबेस कॉल एक साथ (Parallel) चलाओ 
+        // और .select() से भारी-भरकम quizData को हर स्टूडेंट की फाइल से डाउनलोड होने से रोको!
+        const [classDoc, historySnapshot] = await Promise.all([
+            db.collection('LiveExams').doc(classCode).get(),
+            db.collection('history')
+                .where('groupCode', '==', classCode)
+                .select('candidateDetails', 'score', 'time', 'createdAt', 'userAnswers')
+                .get()
+        ]);
+
+        if (!classDoc.exists) {
+            return res.status(404).json({ success: false, error: "Class code not found." });
+        }
         
         const classData = classDoc.data();
-        if (classData.instructorUid !== req.user.uid) return res.status(403).json({ success: false, error: "Access Denied." });
+        if (classData.instructorUid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Access Denied." });
+        }
 
-        const historySnapshot = await db.collection('history').where('groupCode', '==', classCode).get();
-        
         let studentResults = [];
         let totalScoreSum = 0;
 
         historySnapshot.forEach(doc => {
             const data = doc.data();
-            totalScoreSum += data.score;
+            const numericScore = Number(data.score) || 0;
+            totalScoreSum += numericScore;
+
             studentResults.push({
-                docId: doc.id, // 🔥 Kick button ke liye jaruri hai
+                docId: doc.id,
                 name: data.candidateDetails?.name || "Unknown",
                 rollNo: data.candidateDetails?.rollNo || "N/A",
                 batch: data.candidateDetails?.batchTime || "N/A",
-                phone: data.candidateDetails?.phone || "N/A", // 🔥 YAHAN PHONE ADD KIYA HAI 🔥
-                score: data.score,
+                phone: data.candidateDetails?.phone || "N/A",
+                score: numericScore,
                 timeTaken: data.time || "Unknown",
                 submittedAt: data.createdAt ? (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : data.createdAt) : null,
-                userAnswers: data.userAnswers
+                userAnswers: data.userAnswers || {}
             });
         });
+
+        const totalQs = Array.isArray(classData.quizData) ? classData.quizData.length : 0;
 
         res.status(200).json({
             success: true,
             analytics: {
                 className: classData.name,
                 totalStudents: studentResults.length,
-                averagePercentage: classData.quizData.length > 0 ? ((studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0) / classData.quizData.length * 100).toFixed(1) : 0,
-                maxScore: classData.quizData.length,
-                quizData: classData.quizData, 
+                averagePercentage: totalQs > 0 ? ((studentResults.length > 0 ? (totalScoreSum / studentResults.length) : 0) / totalQs * 100).toFixed(1) : 0,
+                maxScore: totalQs,
+                quizData: classData.quizData,
                 students: studentResults
             }
         });
     } catch (error) {
+        console.error("🚨 Analytics Fetch Error:", error);
         res.status(500).json({ success: false, error: "Server error." });
     }
 });
 
 // =======================================================================
-// 🔥 6. STUDENT LEADERBOARD (TOP 10 + USER RANK) 🔥
+// 🔥 6. STUDENT LEADERBOARD (ULTRA-FAST PARALLEL + LIGHTWEIGHT SELECT) 🔥
 // =======================================================================
 app.get('/api/v1/leaderboard/:code', async (req, res) => {
     try {
         const classCode = xss(req.params.code.trim().toUpperCase());
-        const studentName = req.query.name ? xss(req.query.name.trim()) : null; 
+        const studentName = req.query.name ? xss(req.query.name.trim()) : null;
 
-        const classDoc = await db.collection('LiveExams').doc(classCode).get();
-        if (!classDoc.exists) return res.status(404).json({ success: false, error: "Class not found." });
+        // ⚡ लीडरबोर्ड में सिर्फ नाम और स्कोर चाहिए—पूरा पेपर और जवाब डाउनलोड करना बंद!
+        const [classDoc, historySnapshot] = await Promise.all([
+            db.collection('LiveExams').doc(classCode).select('quizData').get(),
+            db.collection('history')
+                .where('groupCode', '==', classCode)
+                .select('candidateDetails', 'score')
+                .get()
+        ]);
 
-        const historySnapshot = await db.collection('history').where('groupCode', '==', classCode).get();
+        if (!classDoc.exists) {
+            return res.status(404).json({ success: false, error: "Class not found." });
+        }
+
         let students = [];
-        
         historySnapshot.forEach(doc => {
-            students.push({ name: doc.data().candidateDetails?.name || "Student", score: doc.data().score });
+            students.push({ 
+                name: doc.data().candidateDetails?.name || "Student", 
+                score: Number(doc.data().score) || 0 
+            });
         });
 
         // Sort Highest to Lowest
@@ -928,25 +959,26 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         let currentRank = 1;
         let currentUserRankData = null;
 
-        for(let i = 0; i < students.length; i++) {
-            if (i > 0 && students[i].score < students[i-1].score) currentRank = i + 1;
-            
+        for (let i = 0; i < students.length; i++) {
+            if (i > 0 && students[i].score < students[i - 1].score) currentRank = i + 1;
             const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score };
             rankedStudents.push(rankObj);
 
-            // Save rank if it matches the student requesting it
             if (studentName && students[i].name.toLowerCase() === studentName.toLowerCase()) {
                 if (!currentUserRankData) currentUserRankData = rankObj;
             }
         }
 
+        const totalQs = Array.isArray(classDoc.data().quizData) ? classDoc.data().quizData.length : 0;
+
         res.status(200).json({
             success: true,
-            maxScore: classDoc.data().quizData.length,
-            top10: rankedStudents.slice(0, 10), 
-            userRank: currentUserRankData 
+            maxScore: totalQs,
+            top10: rankedStudents.slice(0, 10),
+            userRank: currentUserRankData
         });
     } catch (error) {
+        console.error("🚨 Leaderboard Error:", error);
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
