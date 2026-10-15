@@ -970,7 +970,7 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 6. STUDENT LEADERBOARD (ULTRA-FAST PARALLEL + LIGHTWEIGHT SELECT) 🔥
+// 🔥 6. STUDENT LEADERBOARD (SMART DENSE RANKING & AUTO-SYNC) 🔥
 // =======================================================================
 app.get('/api/v1/leaderboard/:code', async (req, res) => {
     try {
@@ -998,29 +998,37 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             });
         });
 
-        // Sort Highest to Lowest
+        // 🔥 SMART DENSE RANKING LOGIC 🔥
         students.sort((a, b) => b.score - a.score);
 
         let rankedStudents = [];
         let currentRank = 1;
+        let previousScore = null;
         let currentUserRankData = null;
 
         for (let i = 0; i < students.length; i++) {
-            if (i > 0 && students[i].score < students[i - 1].score) currentRank = i + 1;
+            // अगर स्कोर पिछले वाले से कम है, तभी रैंक 1 बढ़ाओ (सेम स्कोर = सेम रैंक)
+            if (previousScore !== null && students[i].score < previousScore) {
+                currentRank++;
+            }
+            
             const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score };
             rankedStudents.push(rankObj);
+            previousScore = students[i].score;
 
             if (studentName && students[i].name.toLowerCase() === studentName.toLowerCase()) {
                 if (!currentUserRankData) currentUserRankData = rankObj;
             }
         }
 
+        // 🔥 सिर्फ Top 10 बच्चों को फ्रंटएंड पर भेजो (ताकि डेटाबेस और नेटवर्क का लोड कम रहे)
+        const top10Ranked = rankedStudents.filter(s => s.rank <= 10);
         const totalQs = Array.isArray(classDoc.data().quizData) ? classDoc.data().quizData.length : 0;
 
         res.status(200).json({
             success: true,
             maxScore: totalQs,
-            top10: rankedStudents.slice(0, 10),
+            top10: top10Ranked,
             userRank: currentUserRankData
         });
     } catch (error) {
