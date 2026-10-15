@@ -235,7 +235,7 @@ const strictNegativeRules = `
 1. 🎯 100% FACTUAL ACCURACY: The 'correctAnswer' MUST be indisputably correct.
 2. 🧮 SMART FORMATTING: Use standard LaTeX enclosed in SINGLE '$' signs for ALL equations, variables, and fractions (e.g., $\\frac{1}{2}$). 
 3. 🚨 CRITICAL FOR OPTIONS: Any fraction, equation, or math variable inside the options (A, B, C, D) MUST ALWAYS be wrapped in '$' signs.
-4. ⚡ EXPLANATION: Provide a HIGHLY DETAILED, step-by-step logical proof. YOU MUST insert the exact HTML tag <br><br> between every single step.
+4. ⚡ EXPLANATION RULES (COACHING STYLE): You are a friendly Indian coaching teacher, NOT a textbook. STRICT LANGUAGE MATCHING: The explanation MUST strictly be in the SAME language as the generated question (e.g., if the question is in Hindi, explain in simple Hindi. If English, explain in simple English). Keep it extremely simple, use maximum 2 to 3 very short bullet points. Do NOT use complex vocabulary. If there is a 'Short-Trick' or 'Logic', explain that directly. Make it so easy that a 10th-grade average student can understand it in 5 seconds. Use the exact HTML tag <br><br> for line breaks.
 5. ❌ NO MARKDOWN IN TEXT: NEVER use asterisks (**) or underscores (__) for bolding.
 6. 🔢 INTEGER QUESTIONS: If type is "integer", the 'correctAnswer' MUST be a strict whole number string (e.g., "4", "45") using ONLY numerical digits (0-9). DO NOT include signs, decimals, variables, or words.
 7. 📊 MATCH THE COLUMNS: If a question is "Match the following", you MUST format Column I and Column II strictly SIDE-BY-SIDE using an HTML table inside the 'question' field like this: <table style='width:100%; border-collapse:collapse; margin-top:10px; font-size:0.9em;'><tr style='border-bottom:1px solid #cbd5e1; text-align:left;'><th style='padding:6px;'>Column I</th><th style='padding:6px;'>Column II</th></tr><tr><td style='padding:6px; vertical-align:top;'>(A) Item 1</td><td style='padding:6px; vertical-align:top;'>(P) Match 1</td></tr></table>. Use ONLY single quotes (') inside HTML attributes so JSON never breaks. NEVER stack the two columns one below the other.
@@ -315,7 +315,7 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
     try {
         const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
         
-        const prompt = `You are a friendly and expert AI tutor for a student. 
+        const prompt = `You are 'NotesToQuiz Tutor', a cool, friendly, and expert coaching teacher for Indian competitive exams. 
         The student encountered this question in a mock test:
         Question: ${question}
         Correct Answer: ${correctAnswer} (${options[correctAnswer]})
@@ -326,10 +326,13 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
         YOUR TASK: Explain the concept step-by-step in a very simple, easy-to-understand tone.
         
         🚨 CRITICAL RULES FOR AI TUTOR (DO NOT BREAK):
-        1. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
-        2. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters (like |, -, *). It breaks the mobile UI. 
-        3. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
-        4. SPACING: Use the exact HTML tag <br><br> for line breaks between paragraphs to keep it readable.`;
+        1. DYNAMIC LANGUAGE MATCHING: If the student asks the doubt in pure Hindi, reply in pure Hindi. If asked in English, reply in English. If the language is mixed or not specified, default to conversational Hinglish.
+        2. MENTOR TONE: Talk directly to the student like a mentor (e.g., 'Dekho dost...', 'Listen carefully...').
+        3. KEEP IT SHORT: STRICTLY keep your answer under 4-5 lines. Break down complex concepts into a real-life example or a short trick. NO long essays.
+        4. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
+        5. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters (like |, -, *). It breaks the mobile UI. 
+        6. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
+        7. EMOJIS & SPACING: Format with bullet points and emojis to make it readable. Use the exact HTML tag <br><br> for line breaks.`;
         
         const response = await generateAIContent([{ text: prompt }], false);
         res.status(200).json({ success: true, answer: response.text });
