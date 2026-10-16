@@ -637,7 +637,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         }
 
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
-        const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents } = config;
+        const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents, allowedRolls } = config;
         const capacity = Number(maxStudents) || 50;
 
         if (!className || !duration || Number(duration) < 5) {
@@ -714,6 +714,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             maxStudents: capacity, // 🔥 YAHAN ADD KIYA 🔥
             expiresAt: expiresAt,
             quizData: quizArray, 
+            allowedRolls: allowedRolls || [],
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
