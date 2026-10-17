@@ -34,12 +34,14 @@ const db = admin.firestore();
 const app = express();
 app.set('trust proxy', 1); // 🔥 Fixes the X-Forwarded-For Render warning
 
-// 🔥 NODEMAILER SETUP (NEW) 🔥
+// 🔥 NODEMAILER SETUP (BULLETPROOF CONFIGURATION) 🔥
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, // SSL encryption
     auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        pass: process.env.EMAIL_PASS // 16-character App Password expected here
     }
 });
 
@@ -48,6 +50,7 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } 
 });
+
 // ==========================================
 // --- SECURITY & MIDDLEWARE CONFIGURATION ---
 // ==========================================
@@ -407,12 +410,13 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
                 }
 
                 let maxAllowedQs = 15; 
-                if (userPlan === 'Pro') maxAllowedQs = 25;
-                if (userPlan === 'Elite') maxAllowedQs = 60;
+                if (userPlan === 'Starter') maxAllowedQs = 30;
+                if (userPlan === 'Pro') maxAllowedQs = 50;
+                if (userPlan === 'Elite') maxAllowedQs = 100;
                 if (userPlan === 'Institute') maxAllowedQs = 150;
 
                 if (qCount > maxAllowedQs) {
-                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test.`);
+                    throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade.`);
                 }
 
                 if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} but have ${currentCredits}.`);
@@ -562,11 +566,12 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
                 }
 
                 let maxAllowedQs = 15; 
-                if (userPlan === 'Pro') maxAllowedQs = 25;
-                if (userPlan === 'Elite') maxAllowedQs = 60;
+                if (userPlan === 'Starter') maxAllowedQs = 30;
+                if (userPlan === 'Pro') maxAllowedQs = 50;
+                if (userPlan === 'Elite') maxAllowedQs = 100;
                 if (userPlan === 'Institute') maxAllowedQs = 150;
 
-                if (qCount > maxAllowedQs) throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test.`);
+                if (qCount > maxAllowedQs) throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade.`);
                 if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! Aapke paas ${currentCredits} credits hain.`);
                 
                 finalRemainingCredits = currentCredits - requiredCredits;
@@ -639,6 +644,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
         const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents, allowedRolls } = config;
         const capacity = Number(maxStudents) || 50;
+        let qCount = Number(questionCount) || 15;
 
         if (!className || !duration || Number(duration) < 5) {
             return res.status(400).json({ success: false, error: "Invalid class details." });
@@ -647,18 +653,35 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             return res.status(400).json({ success: false, error: "Please upload test paper / answer key files." });
         }
 
-        const qCount = Number(questionCount) || 15;
-        requiredCredits = Math.max(20, Math.ceil(qCount * 1));
-        
-        // 💰 1. DEDUCT CREDITS FIRST
+        // 💰 1. DEDUCT CREDITS & ENFORCE PLAN LIMITS FIRST
         const userRef = db.collection('users').doc(userId);
         await db.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             let currentCredits = 30; 
-            if (userDoc.exists && userDoc.data().credits !== undefined) {
-                currentCredits = Number(userDoc.data().credits);
+            let userPlan = 'Free';
+            
+            if (userDoc.exists) {
+                if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
+                if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
             }
-            if (currentCredits < requiredCredits) throw new Error(`Insufficient credits! You need ${requiredCredits} to generate this group test.`);
+
+            // 🔥 GATEKEEPER: ENFORCE QUESTIONS PER TEST BASED ON PLAN
+            let maxAllowedQs = 15; // Free Plan default
+            if (userPlan === 'Starter') maxAllowedQs = 30;
+            if (userPlan === 'Pro') maxAllowedQs = 50;
+            if (userPlan === 'Elite') maxAllowedQs = 100;
+            if (userPlan === 'Institute') maxAllowedQs = 150;
+
+            if (qCount > maxAllowedQs) {
+                throw new Error(`Plan Limit Exceeded! Your current plan (${userPlan}) allows a maximum of ${maxAllowedQs} questions per test. Please upgrade.`);
+            }
+
+            requiredCredits = Math.max(20, Math.ceil(qCount * 1));
+
+            if (currentCredits < requiredCredits) {
+                throw new Error(`Insufficient credits! You need ${requiredCredits} to generate this group test.`);
+            }
+            
             transaction.set(userRef, { credits: currentCredits - requiredCredits }, { merge: true });
         });
         creditsDeducted = true; 
@@ -711,10 +734,10 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             requireBatch: Boolean(requireBatch),
             requireRoll: Boolean(requireRoll),
             requirePhone: Boolean(requirePhone),
-            maxStudents: capacity, // 🔥 YAHAN ADD KIYA 🔥
+            maxStudents: capacity,
             expiresAt: expiresAt,
             quizData: quizArray, 
-            allowedRolls: allowedRolls || [],
+            allowedRolls: allowedRolls || [], // 🔥 THIS IS IMPORTANT FOR ROSTER PROTECTION
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
@@ -768,7 +791,6 @@ app.post('/api/v1/verify-class', async (req, res) => {
         const countSnapshot = await db.collection('history').where('groupCode', '==', safeCode).count().get();
         const currentStudentCount = countSnapshot.data().count;
 
-        // 🔥 Ab database se capacity nikalega (agar purana test hai to default 50 manega)
         const MAX_SEATS = group.maxStudents || 50; 
                 
         if (currentStudentCount >= MAX_SEATS) {
@@ -788,6 +810,7 @@ app.post('/api/v1/verify-class', async (req, res) => {
                 requireBatch: group.requireBatch,
                 requireRoll: group.requireRoll,
                 requirePhone: group.requirePhone,
+                allowedRolls: group.allowedRolls || [], // 🔥 SENT TO FRONTEND FOR GATEKEEPING
                 quizData: group.quizData 
             }
         });
@@ -809,11 +832,22 @@ app.post('/api/v1/save-history', async (req, res) => {
         let finalTestType = xss(testType || 'individual');
         let finalGroupCode = xss(groupCode || 'none');
 
-        // 🔥 FIRST ATTEMPT ONLY PROTECTION FOR GROUP TESTS 🔥
+        // 🔥 BACKEND GATEKEEPER: PREVENT FAKE ROLL NUMBERS VIA API HIJACKING 🔥
         if (finalTestType === 'group_test' && finalGroupCode !== 'none') {
+            const groupDoc = await db.collection('LiveExams').doc(finalGroupCode).get();
+            if (groupDoc.exists) {
+                const gData = groupDoc.data();
+                if (gData.requireRoll && gData.allowedRolls && gData.allowedRolls.length > 0) {
+                    const studentRoll = candidateDetails && candidateDetails.rollNo ? candidateDetails.rollNo.toString().trim() : "";
+                    if (!gData.allowedRolls.includes(studentRoll)) {
+                        return res.status(403).json({ success: false, error: `Access Denied. Roll Number ${studentRoll} is not enrolled in this batch.` });
+                    }
+                }
+            }
+
+            // 🔥 FIRST ATTEMPT ONLY PROTECTION FOR GROUP TESTS 🔥
             let alreadyAttempted = Boolean(isReattempt);
 
-            // Backend Double-Check: क्या इस userId ने पहले इस groupCode का टेस्ट दिया है?
             if (!alreadyAttempted && activeUserId !== 'guest_user') {
                 const existingSnap = await db.collection('history')
                     .where('groupCode', '==', finalGroupCode)
@@ -826,7 +860,6 @@ app.post('/api/v1/save-history', async (req, res) => {
                 }
             }
 
-            // अगर यह 2nd/3rd Attempt है, तो इसे Teacher Analytics & Leaderboard से अलग कर दो!
             if (alreadyAttempted) {
                 finalTestType = 'individual';
                 finalGroupCode = `reattempt_${finalGroupCode}`;
@@ -834,7 +867,6 @@ app.post('/api/v1/save-history', async (req, res) => {
             }
         }
 
-        // वापस तेरे असली 'history' कलेक्शन में सेव करो ताकि Teacher Analytics तुरंत डेटा दिखाए
         const docRef = await db.collection('history').add({
             userId: xss(activeUserId),
             subject: xss(subject || 'General'),
