@@ -84,7 +84,7 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 // ANTI-DDOS / SPAM GUARD
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
-    max: 50, 
+    max: 500, 
     message: { 
         success: false, 
         error: "Aram se bhai! Bahut zyada requests aagayi hain. 15 minute baad try kar." 
