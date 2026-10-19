@@ -279,37 +279,50 @@ app.get('/api/ping', (req, res) => {
     res.status(200).send('PONG - Server is awake!');
 });
 
-// 🔥 NEW: SUPPORT TICKET SUBMISSION API (WITH EMAIL NOTIFICATION)
+// 🔥 NEW: CRASH-PROOF SUPPORT TICKET API 🔥
 app.post('/api/v1/support-ticket', async (req, res) => {
     try {
         const { uid, email, name, issueType, description, timestamp } = req.body;
         
-        // 1. Save the ticket directly to Firebase Firestore
+        // 1. Data Sanitization (Undefined क्रैश को रोकने के लिए String() लगाया है)
+        const safeUid = xss(String(uid || 'guest'));
+        const safeEmail = xss(String(email || 'No Email'));
+        const safeName = xss(String(name || 'Guest'));
+        const safeIssue = xss(String(issueType || 'General'));
+        const safeDesc = xss(String(description || ''));
+
+        // 2. Save the ticket directly to Firebase Firestore (यह 100% काम करेगा)
         await db.collection('SupportTickets').add({
-            uid: xss(uid || 'guest'),
-            email: xss(email || 'No Email'),
-            name: xss(name || 'Guest'),
-            issueType: xss(issueType),
-            description: xss(description),
+            uid: safeUid,
+            email: safeEmail,
+            name: safeName,
+            issueType: safeIssue,
+            description: safeDesc,
             status: 'Open',
-            userReportedTime: timestamp,
+            userReportedTime: timestamp || Date.now(),
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // 2. Shoot Email Notification to Yourself
-        const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: process.env.EMAIL_USER, // Tere hi email par aayega
-            subject: `🚨 New Support Ticket: ${xss(issueType)}`,
-            text: `New Ticket Details:\n\nName: ${xss(name || 'Guest')}\nEmail: ${xss(email || 'No Email')}\nIssue Type: ${xss(issueType)}\n\nDescription:\n${xss(description)}`
-        };
+        // 3. Shoot Email Notification (Try-Catch के अंदर ताकि फेल होने पर क्रैश न हो)
+        try {
+            const mailOptions = {
+                from: process.env.EMAIL_USER,
+                to: process.env.EMAIL_USER, // तेरे ही ईमेल पर आएगा
+                subject: `🚨 New Support Ticket: ${safeIssue}`,
+                text: `New Ticket Details:\n\nName: ${safeName}\nEmail: ${safeEmail}\nIssue Type: ${safeIssue}\n\nDescription:\n${safeDesc}`
+            };
 
-        await transporter.sendMail(mailOptions);
+            await transporter.sendMail(mailOptions);
+            return res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
+        } catch (emailError) {
+            // 🔥 अगर ईमेल फेल हुआ, तो सर्वर क्रैश नहीं होगा, बस लॉग में एरर छपेगा और यूज़र को सक्सेस मिलेगा!
+            console.error("🚨 Email sending failed, but ticket saved to DB:", emailError.message);
+            return res.status(200).json({ success: true, message: 'Ticket received securely (Email notification delayed).' });
+        }
 
-        res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
     } catch (error) {
         console.error("Support Ticket Error:", error);
-        res.status(500).json({ success: false, error: "Could not save the ticket or send email." });
+        res.status(500).json({ success: false, error: "Could not save the ticket." });
     }
 });
 
