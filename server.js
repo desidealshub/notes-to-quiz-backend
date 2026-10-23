@@ -1087,27 +1087,82 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 7. RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING) 🔥
+// 🔥 7.A CHECK COUPON (FOR FRONTEND UI) 🔥
+// =======================================================================
+app.post('/api/v1/check-coupon', async (req, res) => {
+    try {
+        const { amount, couponCode } = req.body;
+        if (!amount || !couponCode) return res.status(400).json({ success: false, error: "Missing details." });
+
+        const safeCode = xss(couponCode.trim().toUpperCase());
+        const couponDoc = await db.collection('coupons').doc(safeCode).get();
+
+        if (!couponDoc.exists) {
+            return res.status(404).json({ success: false, error: "Invalid Coupon Code." });
+        }
+
+        const couponData = couponDoc.data();
+        if (!couponData.isActive || !couponData.validFor.includes(Number(amount))) {
+            return res.status(400).json({ success: false, error: `This code is not valid for the ₹${amount} plan.` });
+        }
+
+        const discountAmount = (Number(amount) * Number(couponData.discountPercent)) / 100;
+        const finalAmount = Number(amount) - discountAmount;
+
+        res.status(200).json({ 
+            success: true, 
+            originalAmount: amount,
+            finalAmount: finalAmount, 
+            discountPercent: couponData.discountPercent 
+        });
+    } catch (error) {
+        console.error("Coupon Check Error:", error);
+        res.status(500).json({ success: false, error: "Server error checking coupon." });
+    }
+});
+
+// =======================================================================
+// 🔥 7.B RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING WITH COUPON) 🔥
 // =======================================================================
 app.post('/api/v1/create-order', async (req, res) => {
     try {
         if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Please log in to purchase credits." });
         
-        const { amount } = req.body;
+        const { amount, couponCode } = req.body; // 👈 कूपन कोड फ्रंटएंड से आएगा
         if (!amount || amount < 1) return res.status(400).json({ success: false, error: "Invalid amount." });
 
+        let finalPayableAmount = Number(amount);
+        let appliedCoupon = null;
+
+        // 🚨 THE BRAIN: Backend Par Coupon Calculation (Hack-Proof)
+        if (couponCode) {
+            const safeCode = xss(couponCode.trim().toUpperCase());
+            const couponDoc = await db.collection('coupons').doc(safeCode).get();
+            
+            if (couponDoc.exists && couponDoc.data().isActive && couponDoc.data().validFor.includes(Number(amount))) {
+                const discount = (Number(amount) * Number(couponDoc.data().discountPercent)) / 100;
+                finalPayableAmount = Number(amount) - discount;
+                appliedCoupon = safeCode;
+            }
+        }
+
+        // Razorpay को सिर्फ डिस्काउंटेड (कटा हुआ) अमाउंट ही भेजेंगे
         const options = {
-            amount: amount * 100, 
+            amount: Math.round(finalPayableAmount * 100), // Razorpay needs paise
             currency: "INR",
             receipt: `QUIZ_${req.user.uid.substring(0, 5)}_${Date.now()}`,
             notes: {
                 business: "NotesToQuiz",
-                userEmail: req.user.email
+                userEmail: req.user.email,
+                originalPlan: amount,
+                couponUsed: appliedCoupon || 'NONE' // 👈 Razorpay के डैशबोर्ड में भी दिखेगा
             }
         };
         
         const order = await razorpay.orders.create(options);
-        res.status(200).json({ success: true, order });
+        
+        // फ्रंटएंड को नया अमाउंट बता दो ताकि Razorpay का पॉपअप उतने का ही खुले
+        res.status(200).json({ success: true, order, finalAmount: finalPayableAmount, appliedCoupon });
     } catch (error) {
         console.error("Razorpay Order Error:", error);
         res.status(500).json({ success: false, error: "Failed to connect to payment gateway." });
@@ -1115,13 +1170,14 @@ app.post('/api/v1/create-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 8. RAZORPAY PAYMENT VERIFICATION, PLAN UPGRADE & REFERRAL 🔥
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION & COMMISSION TRACKING 🔥
 // =======================================================================
 app.post('/api/v1/verify-payment', async (req, res) => {
     try {
         if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
         
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd, phone } = req.body;
+        // 🔥 Front-end se 'couponUsed' aur 'amountPaid' bhi aayega
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd, phone, originalPlanAmount, amountPaid, couponUsed } = req.body;
 
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -1131,7 +1187,6 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        // 🔥 DYNAMIC PLAN UPGRADE MAPPING 🔥
         let upgradedPlan = 'Starter';
         const added = Number(creditsToAdd);
         if (added >= 250 && added < 600) upgradedPlan = 'Pro';
@@ -1145,30 +1200,40 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         let finalCreditsToAdd = added;
         let bonusMessage = "";
 
-        // 🎁 REFER & EARN LOGIC (First Purchase Only) 🎁
         if (userData.hasMadePurchase === false && userData.referredBy) {
-            finalCreditsToAdd += 50; // ख़रीदने वाले को 50 एक्स्ट्रा
+            finalCreditsToAdd += 50; 
             bonusMessage = " (+50 Referral Bonus!)";
             try {
-                // जिसने शेयर किया था, उसे 100 क्रेडिट्स भेज दो
                 const referrerRef = db.collection('users').doc(userData.referredBy);
-                await referrerRef.set({
-                    credits: admin.firestore.FieldValue.increment(100)
-                }, { merge: true });
-                console.log(`✅ 100 Credits auto-credited to Referrer: ${userData.referredBy}`);
-            } catch (e) {
-                console.error("⚠️ Referrer update failed:", e);
-            }
+                await referrerRef.set({ credits: admin.firestore.FieldValue.increment(100) }, { merge: true });
+            } catch (e) { console.error("⚠️ Referrer update failed:", e); }
         }
 
-        // 🔥 Update Buyer (Credits + Plan + Phone Number + Timestamp) 🔥
+        // 1. Update Buyer Account
         await userRef.set({
             credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
             plan: upgradedPlan,
-            phone: xss(phone || userData.phone || ''), // 👈 यहाँ फोन नंबर सेव होगा
-            hasMadePurchase: true, // 🛑 अब ये बोनस दोबारा नहीं लूट पाएगा
+            phone: xss(phone || userData.phone || ''), 
+            hasMadePurchase: true, 
             lastUpdated: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
+
+        // 🚨 2. TEACHER COMMISSION TRACKING (FIREBASE LOGGING) 🚨
+        // Ye tere admin logic ke liye 'successful_payments' collection banayega
+        try {
+            await db.collection('successful_payments').add({
+                uid: req.user.uid,
+                email: req.user.email,
+                originalPlan: Number(originalPlanAmount) || 0, // ₹199 or ₹499
+                amountPaid: Number(amountPaid) || 0,           // ₹159.20 (discounted)
+                couponUsed: couponUsed ? xss(couponUsed.toUpperCase()) : 'NONE', // Kis teacher ka code tha?
+                razorpay_payment_id: razorpay_payment_id,
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Payment logged for Commission Tracking. Code: ${couponUsed || 'NONE'}`);
+        } catch (dbErr) {
+            console.error("⚠️ Failed to log payment for commission, but user upgraded successfully.", dbErr);
+        }
 
         res.status(200).json({ 
             success: true, 
