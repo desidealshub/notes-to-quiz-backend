@@ -331,24 +331,24 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
     try {
         const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
         
-        const prompt = `You are 'NotesToQuiz Tutor', a cool, friendly, and expert coaching teacher for Indian competitive exams. 
-        The student encountered this question in a mock test:
-        Question: ${question}
-        Correct Answer: ${correctAnswer} (${options[correctAnswer]})
-        Official Explanation: ${explanation}
+        const prompt = `You are a highly intelligent, patient, and friendly AI Tutor. A student is asking a doubt about a mock test question they just attempted.
         
-        The student is confused and asks this doubt: "${studentDoubt}"
-        
-        YOUR TASK: Explain the concept step-by-step in a very simple, easy-to-understand tone.
-        
-        🚨 CRITICAL RULES FOR AI TUTOR (DO NOT BREAK):
-        1. DYNAMIC LANGUAGE MATCHING: If the student asks the doubt in pure Hindi, reply in pure Hindi. If asked in English, reply in English. If the language is mixed or not specified, default to conversational Hinglish.
-        2. MENTOR TONE: Talk directly to the student like a mentor (e.g., 'Dekho dost...', 'Listen carefully...').
-        3. KEEP IT SHORT: STRICTLY keep your answer under 4-5 lines. Break down complex concepts into a real-life example or a short trick. NO long essays.
-        4. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
-        5. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters (like |, -, *). It breaks the mobile UI. 
-        6. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
-        7. EMOJIS & SPACING: Format with bullet points and emojis to make it readable. Use the exact HTML tag <br><br> for line breaks.`;
+        [CONTEXT]
+        Original Question: ${question}
+        Options Provided: ${JSON.stringify(options)}
+        Correct Answer: ${correctAnswer}
+        Original Explanation: ${explanation}
+        Student's Specific Doubt: ${studentDoubt}
+
+        [YOUR TASK & STRICT RULES]
+        1. STRICT LANGUAGE MATCHING: Analyze the language and script of the "Original Question". You MUST write your ENTIRE reply in that EXACT SAME language. For example, if the question is in Hindi (Devanagari script), you MUST reply in pure Hindi (Devanagari). The ONLY exception is if the student explicitly asks you to explain in English/Hindi inside their "Student's Doubt".
+        2. EXPLAIN LIKE I'M AN 8TH GRADER: The student is confused. Break down the concept into the absolute simplest terms. Explain it as if you are teaching an 8th-class student. Use simple daily-life examples, analogies, and avoid heavy academic jargon.
+        3. BE DIRECT & DETAILED: Do not just copy-paste the "Original Explanation". Understand what exactly the student is asking in their doubt, and clear it up step-by-step.
+        4. WARM TONE: Start with an encouraging and positive opening.
+        5. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
+        6. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters. It breaks the mobile UI. 
+        7. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
+        8. EMOJIS & SPACING: Format with bullet points and emojis to make it readable. Use the exact HTML tag <br><br> for line breaks.`;
         
         const response = await generateAIContent([{ text: prompt }], false);
         res.status(200).json({ success: true, answer: response.text });
@@ -595,16 +595,24 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
         // 1. FRONTEND SE AAYE HUE DATA KO CAPTURE AUR CLEAN KARO
         const examContext = targetExam ? targetExam.toUpperCase() : "Competitive Exam";
-        const mediumContext = medium ? `in ${medium} language` : "in English/Hindi";
         const boardContext = board ? `for ${board} Board` : "";
         const streamContext = stream ? `(${stream} stream)` : "";
         const difficultyLevel = difficulty || 'medium';
+
+        // 🔥 THE FIX: STRICT LANGUAGE ENFORCEMENT 🔥
+        let languageInstruction = medium ? `The questions and explanations MUST be written strictly in ${medium} language.` : `The questions and explanations MUST be written in the appropriate language.`;
+        
+        // Agar subject Hindi ya Sanskrit hai, to WhatsApp language block karo aur pure Devanagari force karo
+        if (subject && (subject.toLowerCase().includes('hindi') || subject.toLowerCase().includes('sanskrit') || subject.includes('हिंदी') || subject.includes('संस्कृत'))) {
+            languageInstruction = `CRITICAL LANGUAGE RULE: Since the subject is "${subject}", EVERY single word of the questions, options, and explanations MUST be written STRICTLY in pure Devanagari script (Hindi/Sanskrit font). ABSOLUTELY NO Roman English, NO Hinglish, and NO WhatsApp language.`;
+        }
 
         // 2. THE ULTIMATE DYNAMIC AI PROMPT
         const prompt = `You are an elite, highly experienced examiner and paper setter strictly for ${examContext} ${boardContext}.
         
         YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on the topic "${chapter}". 
-        The questions and explanations MUST be written ${mediumContext}.
+        
+        ${languageInstruction}
         Difficulty Level: ${difficultyLevel}.
 
         🔥 CRITICAL PYQ INSTRUCTION: 
