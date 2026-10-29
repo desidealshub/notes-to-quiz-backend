@@ -593,25 +593,34 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             creditsDeducted = true;
         }
 
-        const streamContext = stream ? `Stream: ${stream}. ` : "";
-        
-        const prompt = `You are an elite expert question paper setter.
-        YOUR TASK: Generate exactly ${qCount} Multiple Choice/Numerical Questions for the subject "${subject}", focusing on the topic "${chapter}".
-        
-        ${buildExamPersona(targetExam, board, streamContext, medium, subject, difficulty || 'medium')}
-        ${strictNegativeRules}
+        // 1. FRONTEND SE AAYE HUE DATA KO CAPTURE AUR CLEAN KARO
+        const examContext = targetExam ? targetExam.toUpperCase() : "Competitive Exam";
+        const mediumContext = medium ? `in ${medium} language` : "in English/Hindi";
+        const boardContext = board ? `for ${board} Board` : "";
+        const streamContext = stream ? `(${stream} stream)` : "";
+        const difficultyLevel = difficulty || 'medium';
 
-        🔥 CRITICAL PYQ INSTRUCTION: The target audience is Class 10th and 12th Board/Competitive students. You MUST prioritize actual Previous Year Questions (PYQs) from the requested exam board (e.g., BSEB, CBSE, JEE, NEET) for the given chapter. If a question is a real PYQ, strictly add the exam name and year in the 'pyqTag' field (e.g., 'BSEB 2022', 'CBSE 2019', 'NEET 2021'). If it's a new practice question, leave 'pyqTag' strictly empty ("").
+        // 2. THE ULTIMATE DYNAMIC AI PROMPT
+        const prompt = `You are an elite, highly experienced examiner and paper setter strictly for ${examContext} ${boardContext}.
         
-        CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure: 
+        YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on the topic "${chapter}". 
+        The questions and explanations MUST be written ${mediumContext}.
+        Difficulty Level: ${difficultyLevel}.
+
+        🔥 CRITICAL PYQ INSTRUCTION: 
+        Since the target exam is ${examContext}, you MUST prioritize actual Previous Year Questions (PYQs) from real ${examContext} exams (such as BPSC Prelims, NDA (I)/(II), CUET UG, IBPS/SBI PO, SSC CGL, Bihar Daroga, Agniveer, BSEB/CBSE Board, etc.) related to this chapter. 
+        If a question is a REAL PYQ, strictly add the exact exam name, shift, and year in the 'pyqTag' field (e.g., 'BPSC 67th PT 2022', 'NDA (I) 2021', 'IBPS PO 2020', 'SSC CGL 2019', 'CUET 2023', 'BSEB 2021'). 
+        If it is a newly generated practice question, leave the 'pyqTag' strictly empty ("").
+
+        CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure. DO NOT wrap it in markdown code blocks like \`\`\`json. Return raw JSON only:
         [ 
           { 
             "type": "single",
             "question": "Question text here...", 
-            "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, 
+            "options": { "A": "Option 1", "B": "Option 2", "C": "Option 3", "D": "Option 4" }, 
             "correctAnswer": "A",
-            "explanation": "Detailed step-by-step logic<br><br>Next step...",
-            "pyqTag": "BSEB 2021" 
+            "explanation": "Detailed step-by-step logic, formula used, or historical fact...",
+            "pyqTag": "NDA 2021" 
           } 
         ]`;
         
