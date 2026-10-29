@@ -600,15 +600,18 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         
         ${buildExamPersona(targetExam, board, streamContext, medium, subject, difficulty || 'medium')}
         ${strictNegativeRules}
+
+        🔥 CRITICAL PYQ INSTRUCTION: The target audience is Class 10th and 12th Board/Competitive students. You MUST prioritize actual Previous Year Questions (PYQs) from the requested exam board (e.g., BSEB, CBSE, JEE, NEET) for the given chapter. If a question is a real PYQ, strictly add the exam name and year in the 'pyqTag' field (e.g., 'BSEB 2022', 'CBSE 2019', 'NEET 2021'). If it's a new practice question, leave 'pyqTag' strictly empty ("").
         
         CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure: 
         [ 
           { 
-            "type": "single", // Can be "single", "multiple" (for multiple correct), or "integer".
+            "type": "single",
             "question": "Question text here...", 
-            "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, // If type is "integer", leave options as empty object {}
-            "correctAnswer": "A", // If type is "multiple", use comma-separated like "A,C". If "integer", use a whole number string like "4" using 0-9 digits only.
-            "explanation": "Detailed step-by-step logic<br><br>Next step..." 
+            "options": { "A": "1", "B": "2", "C": "3", "D": "4" }, 
+            "correctAnswer": "A",
+            "explanation": "Detailed step-by-step logic<br><br>Next step...",
+            "pyqTag": "BSEB 2021" 
           } 
         ]`;
         
