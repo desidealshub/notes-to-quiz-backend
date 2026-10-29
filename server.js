@@ -279,50 +279,107 @@ app.get('/api/ping', (req, res) => {
     res.status(200).send('PONG - Server is awake!');
 });
 
-// 🔥 NEW: CRASH-PROOF SUPPORT TICKET API 🔥
+// =======================================================================
+// 🔥 HACK-PROOF & SEQUENTIAL SUPPORT TICKET SYSTEM 🔥
+// =======================================================================
+
 app.post('/api/v1/support-ticket', async (req, res) => {
     try {
-        const { uid, email, name, issueType, description, timestamp } = req.body;
-        
-        // 1. Data Sanitization (Undefined क्रैश को रोकने के लिए String() लगाया है)
-        const safeUid = xss(String(uid || 'guest'));
-        const safeEmail = xss(String(email || 'No Email'));
-        const safeName = xss(String(name || 'Guest'));
+        const { issueType, description, timestamp } = req.body;
+        let activeUserId = 'guest_user';
+        let activeUserEmail = 'guest@notestoquiz.in';
+        let activeUserName = 'Guest';
+
+        // 🚨 HACK-PROOF SECURITY: Token Verification
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const idToken = authHeader.split('Bearer ')[1];
+            try {
+                const decodedToken = await admin.auth().verifyIdToken(idToken);
+                activeUserId = decodedToken.uid;
+                activeUserEmail = decodedToken.email || 'No Email';
+                activeUserName = decodedToken.name || 'Student';
+            } catch (verifyErr) {
+                console.error("🚨 Token verification failed (Guest mode fallback):", verifyErr.message);
+            }
+        }
+
         const safeIssue = xss(String(issueType || 'General'));
         const safeDesc = xss(String(description || ''));
 
-        // 2. Save the ticket directly to Firebase Firestore (यह 100% काम करेगा)
-        await db.collection('SupportTickets').add({
-            uid: safeUid,
-            email: safeEmail,
-            name: safeName,
+        // 🔥 THE MASTERSTROKE: SEQUENTIAL TICKET ID 🔥
+        const customTicketId = `TKT-${Date.now()}`;
+
+        // Save the ticket using .doc().set() so it stays perfectly sequential in DB
+        await db.collection('SupportTickets').doc(customTicketId).set({
+            ticketId: customTicketId, 
+            uid: activeUserId,
+            email: activeUserEmail,
+            name: activeUserName,
             issueType: safeIssue,
             description: safeDesc,
-            status: 'Open',
+            status: 'Open', 
             userReportedTime: timestamp || Date.now(),
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // 3. Shoot Email Notification (Try-Catch के अंदर ताकि फेल होने पर क्रैश न हो)
+        // Shoot Email Notification
         try {
             const mailOptions = {
                 from: process.env.EMAIL_USER,
-                to: process.env.EMAIL_USER, // तेरे ही ईमेल पर आएगा
-                subject: `🚨 New Support Ticket: ${safeIssue}`,
-                text: `New Ticket Details:\n\nName: ${safeName}\nEmail: ${safeEmail}\nIssue Type: ${safeIssue}\n\nDescription:\n${safeDesc}`
+                to: process.env.EMAIL_USER,
+                subject: `🚨 New Support Ticket [${customTicketId}]: ${safeIssue}`,
+                text: `New Ticket Details:\n\nTicket ID: ${customTicketId}\nName: ${activeUserName}\nEmail: ${activeUserEmail}\nIssue Type: ${safeIssue}\n\nDescription:\n${safeDesc}`
             };
-
             await transporter.sendMail(mailOptions);
             return res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
         } catch (emailError) {
-            // 🔥 अगर ईमेल फेल हुआ, तो सर्वर क्रैश नहीं होगा, बस लॉग में एरर छपेगा और यूज़र को सक्सेस मिलेगा!
             console.error("🚨 Email sending failed, but ticket saved to DB:", emailError.message);
             return res.status(200).json({ success: true, message: 'Ticket received securely (Email notification delayed).' });
         }
-
     } catch (error) {
         console.error("Support Ticket Error:", error);
         res.status(500).json({ success: false, error: "Could not save the ticket." });
+    }
+});
+
+// 🔥 FETCH PREVIOUS SUPPORT TICKETS (HACK-PROOF) 🔥
+app.get('/api/v1/my-tickets', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(200).json({ success: true, tickets: [] });
+        }
+
+        // Token verify karke asli UID nikalo
+        const idToken = authHeader.split('Bearer ')[1];
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        const uid = decodedToken.uid;
+
+        // 🚨 100% SECURE: Sirf usi UID ki tickets nikalo jo token se verify hui hai
+        const snapshot = await db.collection('SupportTickets')
+            .where('uid', '==', uid)
+            .orderBy('createdAt', 'desc')
+            .limit(10)
+            .get();
+
+        let myTickets = [];
+        snapshot.forEach(doc => {
+            const d = doc.data();
+            const createdMs = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().getTime() : Date.now();
+            myTickets.push({
+                id: doc.id,
+                issueType: d.issueType,
+                description: d.description,
+                status: d.status || 'Open',
+                date: new Date(createdMs).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+            });
+        });
+
+        res.status(200).json({ success: true, tickets: myTickets });
+    } catch (error) {
+        console.error("🚨 Fetch Tickets Error:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch tickets. Invalid Session." });
     }
 });
 
