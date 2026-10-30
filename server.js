@@ -242,9 +242,8 @@ const strictNegativeRules = `
 5. ❌ NO MARKDOWN IN TEXT: NEVER use asterisks (**) or underscores (__) for bolding.
 6. 🔢 INTEGER QUESTIONS: If type is "integer", the 'correctAnswer' MUST be a strict whole number string (e.g., "4", "45") using ONLY numerical digits (0-9). DO NOT include signs, decimals, variables, or words.
 7. 📊 MATCH THE COLUMNS: If a question is "Match the following", you MUST format Column I and Column II strictly SIDE-BY-SIDE using an HTML table inside the 'question' field like this: <table style='width:100%; border-collapse:collapse; margin-top:10px; font-size:0.9em;'><tr style='border-bottom:1px solid #cbd5e1; text-align:left;'><th style='padding:6px;'>Column I</th><th style='padding:6px;'>Column II</th></tr><tr><td style='padding:6px; vertical-align:top;'>(A) Item 1</td><td style='padding:6px; vertical-align:top;'>(P) Match 1</td></tr></table>. Use ONLY single quotes (') inside HTML attributes so JSON never breaks. NEVER stack the two columns one below the other.
-8. 🚨 CRITICAL JSON RULE: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text. Start exactly with '[' and end with ']'.`;
-9.  🚨You MUST explain the correct answer in a detailed, step-by-step format. Use HTML tags for formatting: use <b> for bold, <br> for line breaks, and <ul><li> for bullet points. NEVER output the explanation as a single continuous paragraph. Break it down logically.
-    
+8. 🚨 CRITICAL JSON RULE: Return PURE JSON ARRAY ONLY. NO markdown tags like \`\`\`json. NO introductory or closing text. Start exactly with '[' and end with ']'.
+9. 🚨You MUST explain the correct answer in a detailed, step-by-step format. Use HTML tags for formatting: use <b> for bold, <br> for line breaks, and <ul><li> for bullet points. NEVER output the explanation as a single continuous paragraph. Break it down logically.`;    
 // 🔥 THE ULTIMATE JSON PARSER (FIXES ALL MARKDOWN BUGS)
 function safeJSONParse(str) {
     try {
