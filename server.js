@@ -60,6 +60,7 @@ app.use(helmet());
 // 🔥 1. STRICT CORS POLICY
 const allowedOrigins = [
     'https://notestoquiz.in', 
+    'https://dev.notestoquiz.in',
     'https://www.notestoquiz.in',
     'http://localhost:3000',
     'http://localhost:5500', 
