@@ -666,17 +666,16 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         }
 
         // 2. THE ULTIMATE DYNAMIC AI PROMPT
-        const prompt = `You are an elite, highly experienced examiner and paper setter strictly for ${examContext} ${boardContext}.
-        
-        YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on the topic "${chapter}". 
+        const prompt = `You are an elite, highly experienced examiner and paper setter strictly for ${examContext} ${boardContext}. 
+        YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on the topic "${chapter}".
         
         ${languageInstruction}
         Difficulty Level: ${difficultyLevel}.
 
-        🔥 CRITICAL PYQ INSTRUCTION: 
-        Since the target exam is ${examContext}, you MUST prioritize actual Previous Year Questions (PYQs) from real ${examContext} exams (such as BPSC Prelims, NDA (I)/(II), CUET UG, IBPS/SBI PO, SSC CGL, Bihar Daroga, Agniveer, BSEB/CBSE Board, etc.) related to this chapter. 
-        If a question is a REAL PYQ, strictly add the exact exam name, shift, and year in the 'pyqTag' field (e.g., 'BPSC 67th PT 2022', 'NDA (I) 2021', 'IBPS PO 2020', 'SSC CGL 2019', 'CUET 2023', 'BSEB 2021'). 
-        If it is a newly generated practice question, leave the 'pyqTag' strictly empty ("").
+        🔥 CRITICAL PYQ & SYLLABUS BOUNDARY INSTRUCTION: 
+        1. TARGET LOCK: Since the target exam is explicitly ${examContext}, you MUST ONLY provide Previous Year Questions (PYQs) that ACTUALLY appeared in ${examContext} exams.
+        2. STRICT BAN ON MIXING: NEVER include PYQs from higher or irrelevant exams. For example, if the target is "Class 10th", DO NOT include questions from CUET, JEE, NEET, NDA, or SSC. If the target is "BPSC", DO NOT include UPSC or Railway questions unless they perfectly match the exact syllabus difficulty. 
+        3. TAGGING: If a question is a REAL PYQ from ${examContext}, add the exact exam name and year in the 'pyqTag' field (e.g., '${examContext} 2022'). If it is a newly generated practice question, leave 'pyqTag' strictly empty ("").
 
         CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure. DO NOT wrap it in markdown code blocks like \`\`\`json. Return raw JSON only:
         [ 
@@ -686,10 +685,10 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
             "options": { "A": "Option 1", "B": "Option 2", "C": "Option 3", "D": "Option 4" }, 
             "correctAnswer": "A",
             "explanation": "Detailed step-by-step logic, formula used, or historical fact...",
-            "pyqTag": "NDA 2021" 
+            "pyqTag": "BSEB 2021" 
           } 
         ]`;
-        
+
         const parts = [{ text: prompt }];
         const response = await generateAIContent(parts, true);
         const quizArray = safeJSONParse(response.text);
