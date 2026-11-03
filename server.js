@@ -813,7 +813,9 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         
         const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
 
-        // 💾 5. SAVE TO DATABASE
+        // 💾 5. SAVE TO DATABASE (WITH HYBRID PREMIUM LOGIC)
+        const isPremiumTeacher = (userPlan === 'Institute'); // Sirf Institute plan walo ke tests par ₹10 ka lock lagega
+
         await db.collection('LiveExams').doc(generatedCode).set({
             code: generatedCode,
             name: safeName,
@@ -827,9 +829,19 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             maxStudents: capacity,
             expiresAt: expiresAt,
             quizData: quizArray, 
-            allowedRolls: allowedRolls || [], // 🔥 THIS IS IMPORTANT FOR ROSTER PROTECTION
+            // 🔥 The Masterstroke Logic:
+            requiresPayment: isPremiumTeacher, // Agar teacher premium hai, to test paid hoga
+            allowedRolls: isPremiumTeacher ? [] : (allowedRolls || []), // Premium me roster ki jarurat nahi
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
+        });
+
+        // 🔥 Notification for Teacher
+        await db.collection('users').doc(req.user.uid).collection('notifications').add({
+            title: "Test Created Successfully! 🎉",
+            message: `Your new class "${safeName}" is ready. Share Code: ${generatedCode}`,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            read: false
         });
 
         res.status(200).json({ success: true, code: generatedCode, expiresAt });
@@ -886,7 +898,7 @@ app.post('/api/v1/verify-class', async (req, res) => {
         if (currentStudentCount >= MAX_SEATS) {
             return res.status(403).json({ 
                 success: false, 
-                error: `🚨 CLASS FULL! Maximum ${MAX_SEATS} students allowed. If someone cheated, ask your teacher to remove them first.` 
+                error: `🚨 CLASS FULL! Maximum ${MAX_SEATS} students allowed.` 
             });
         }
 
@@ -895,12 +907,14 @@ app.post('/api/v1/verify-class', async (req, res) => {
             group: {
                 code: group.code,
                 name: group.name,
+                createdBy: group.instructorUid, // Needed for Commission Split
+                requiresPayment: group.requiresPayment || false, // 🔥 Frontend ko batayega ki ₹10 mangne hain ya nahi
                 instructorEmail: group.instructorEmail,
                 duration: group.duration,
                 requireBatch: group.requireBatch,
                 requireRoll: group.requireRoll,
                 requirePhone: group.requirePhone,
-                allowedRolls: group.allowedRolls || [], // 🔥 SENT TO FRONTEND FOR GATEKEEPING
+                allowedRolls: group.allowedRolls || [], 
                 quizData: group.quizData 
             }
         });
@@ -922,12 +936,27 @@ app.post('/api/v1/save-history', async (req, res) => {
         let finalTestType = xss(testType || 'individual');
         let finalGroupCode = xss(groupCode || 'none');
 
-        // 🔥 BACKEND GATEKEEPER: PREVENT FAKE ROLL NUMBERS VIA API HIJACKING 🔥
+        // 🔥 THE ULTIMATE BACKEND GATEKEEPER 🔥
         if (finalTestType === 'group_test' && finalGroupCode !== 'none') {
             const groupDoc = await db.collection('LiveExams').doc(finalGroupCode).get();
             if (groupDoc.exists) {
                 const gData = groupDoc.data();
-                if (gData.requireRoll && gData.allowedRolls && gData.allowedRolls.length > 0) {
+
+                // 🚨 RULE A: PREMIUM TEST VERIFICATION (VIA EMAIL/UID) 🚨
+                if (gData.requiresPayment) {
+                    if (activeUserId === 'guest_user') {
+                        return res.status(403).json({ success: false, error: "Access Denied. You must log in and pay ₹10 to submit this premium test." });
+                    }
+                    const studentDoc = await db.collection('users').doc(activeUserId).get();
+                    const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
+                    
+                    // Backend directly checks if this specific user has paid for this specific test
+                    if (!unlockedTests.includes(finalGroupCode)) {
+                        return res.status(403).json({ success: false, error: "Payment Verification Failed. You have not paid for this test." });
+                    }
+                } 
+                // 🚨 RULE B: FREE TEST ROSTER VERIFICATION 🚨
+                else if (gData.requireRoll && gData.allowedRolls && gData.allowedRolls.length > 0) {
                     const studentRoll = candidateDetails && candidateDetails.rollNo ? candidateDetails.rollNo.toString().trim() : "";
                     if (!gData.allowedRolls.includes(studentRoll)) {
                         return res.status(403).json({ success: false, error: `Access Denied. Roll Number ${studentRoll} is not enrolled in this batch.` });
@@ -1373,6 +1402,85 @@ app.post('/api/v1/kick-student', async (req, res) => {
     } catch (error) {
         console.error("🚨 Kick Student Error:", error);
         res.status(500).json({ success: false, error: "Server error while removing student." });
+    }
+});
+
+// =======================================================================
+// 🔥 10. VERIFY ₹10 MICRO-PAYMENT & SPLIT COMMISSION 🔥
+// =======================================================================
+app.post('/api/v1/verify-micro-payment', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
+        
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testCode, teacherUid } = req.body;
+
+        const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
+            .update(razorpay_order_id + "|" + razorpay_payment_id)
+            .digest('hex');
+
+        if (generated_signature !== razorpay_signature) {
+            return res.status(400).json({ success: false, error: "Signature mismatch. Payment failed." });
+        }
+
+        // 1. Update Student Profile (Unlock the test securely via Backend)
+        const studentRef = db.collection('users').doc(req.user.uid);
+        await studentRef.set({
+            unlockedTests: admin.firestore.FieldValue.arrayUnion(testCode)
+        }, { merge: true });
+
+        // 2. Pay The Teacher (Dynamic Commission: 40% = ₹4)
+        const COMMISSION_RATE = 0.40; 
+        if (teacherUid) {
+            const teacherEarned = 10 * COMMISSION_RATE; // ₹4
+            const teacherRef = db.collection('users').doc(teacherUid);
+            await teacherRef.set({
+                totalEarnings: admin.firestore.FieldValue.increment(teacherEarned)
+            }, { merge: true });
+
+            await db.collection('users').doc(teacherUid).collection('notifications').add({
+                title: "💰 You got Paid!",
+                message: `A student unlocked your test (${testCode}). You earned ₹${teacherEarned}.`,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                read: false
+            });
+        }
+
+        res.status(200).json({ success: true, message: "Test unlocked successfully!" });
+    } catch (error) {
+        console.error("🚨 Micro-Payment Error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =======================================================================
+// 🔥 11. FETCH USER NOTIFICATIONS 🔥
+// =======================================================================
+app.get('/api/v1/notifications', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(200).json({ success: true, notifications: [] });
+
+        const snapshot = await db.collection('users').doc(req.user.uid).collection('notifications')
+            .orderBy('timestamp', 'desc')
+            .limit(10)
+            .get();
+
+        let notifications = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            notifications.push({
+                id: doc.id,
+                title: data.title,
+                message: data.message,
+                read: data.read,
+                date: data.timestamp ? new Date(data.timestamp.toDate()).toLocaleDateString() : "Just now"
+            });
+            doc.ref.update({ read: true }); // Auto-mark as read
+        });
+
+        res.status(200).json({ success: true, notifications });
+    } catch (error) {
+        console.error("🚨 Notifications Fetch Error:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch notifications." });
     }
 });
 
