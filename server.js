@@ -6,6 +6,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 const helmet = require('helmet');
+const hpp = require('hpp');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
@@ -52,12 +53,16 @@ const upload = multer({
 });
 
 // ==========================================
-// --- SECURITY & MIDDLEWARE CONFIGURATION ---
+// --- 🛡️ ADVANCED SECURITY & MIDDLEWARE ARMOR ---
 // ==========================================
 
-app.use(helmet());
+// 1. HELMET: Secure HTTP Headers
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: false // Disabled explicitly so it doesn't block MathJax/KaTeX scripts on frontend
+}));
 
-// 🔥 1. STRICT CORS POLICY
+// 2. STRICT CORS POLICY
 const allowedOrigins = [
     'https://notestoquiz.in', 
     'https://dev.notestoquiz.in',
@@ -69,9 +74,11 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
+        // Allow mobile apps or local scripts with no origin, BUT strictly verify web origins
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            console.warn(`🚨 CORS Blocked Unauthorized Request from: ${origin}`);
             callback(new Error('CORS Policy Error: Unauthorized Access'));
         }
     },
@@ -79,16 +86,40 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+// 3. BODY PARSERS (Strict Size Limits to prevent Payload Crash)
+app.use(express.json({ limit: '2mb' })); // 1MB was too small for heavy base64 images
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-// ANTI-DDOS / SPAM GUARD
+// 4. HPP: HTTP Parameter Pollution Guard
+app.use(hpp()); 
+
+// 5. FIRESTORE NoSQL INJECTION GUARD (Custom Middleware)
+// Blocks hackers from sending MongoDB/Firestore logical operators like $gt, $where in JSON payloads
+app.use((req, res, next) => {
+    const sanitizeInjection = (obj) => {
+        if (obj instanceof Object) {
+            for (let key in obj) {
+                if (key.startsWith('$')) {
+                    console.warn(`🚨 NoSQL Injection Attempt Blocked! Key: ${key}`);
+                    delete obj[key];
+                } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+                    sanitizeInjection(obj[key]);
+                }
+            }
+        }
+    };
+    if (req.body) sanitizeInjection(req.body);
+    if (req.query) sanitizeInjection(req.query);
+    next();
+});
+
+// 6. ANTI-DDOS / SPAM GUARD
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, 
-    max: 500, 
+    windowMs: 10 * 60 * 1000, // 10 minutes
+    max: 300, // Limit each IP to 300 requests per 10 minutes
     message: { 
         success: false, 
-        error: "Aram se bhai! Bahut zyada requests aagayi hain. 15 minute baad try kar." 
+        error: "🚨 System Overload: Too many requests from this IP. Please try again after 10 minutes." 
     },
     standardHeaders: true, 
     legacyHeaders: false, 
