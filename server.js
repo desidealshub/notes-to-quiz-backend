@@ -998,6 +998,9 @@ app.post('/api/v1/save-history', async (req, res) => {
             quizData,
             userAnswers: userAnswers || {},
             flaggedQuestions: flaggedQuestions || [],
+            // 🔥 THE ANTI-CHEAT TRACKER 🔥
+            forcedByAntiCheat: Boolean(req.body.forcedByAntiCheat || false),
+            cheatQuestionNumber: req.body.cheatQuestionNumber || null,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
@@ -1125,20 +1128,16 @@ app.get('/api/v1/class-analytics/:code', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 6. STUDENT LEADERBOARD (SMART DENSE RANKING & AUTO-SYNC) 🔥
+// 🔥 6. STUDENT LEADERBOARD (SMART DENSE RANKING & FULL SCORECARD DATA) 🔥
 // =======================================================================
 app.get('/api/v1/leaderboard/:code', async (req, res) => {
     try {
         const classCode = xss(req.params.code.trim().toUpperCase());
         const studentName = req.query.name ? xss(req.query.name.trim()) : null;
 
-        // ⚡ लीडरबोर्ड में सिर्फ नाम और स्कोर चाहिए—पूरा पेपर और जवाब डाउनलोड करना बंद!
         const [classDoc, historySnapshot] = await Promise.all([
             db.collection('LiveExams').doc(classCode).select('quizData').get(),
-            db.collection('history')
-                .where('groupCode', '==', classCode)
-                .select('candidateDetails', 'score')
-                .get()
+            db.collection('history').where('groupCode', '==', classCode).select('candidateDetails', 'score', 'time').get()
         ]);
 
         if (!classDoc.exists) {
@@ -1146,14 +1145,21 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         }
 
         let students = [];
+        let totalScoreSum = 0;
+
         historySnapshot.forEach(doc => {
+            const sc = Number(doc.data().score) || 0;
+            totalScoreSum += sc;
             students.push({ 
                 name: doc.data().candidateDetails?.name || "Student", 
-                score: Number(doc.data().score) || 0 
+                score: sc,
+                timeTaken: doc.data().time || "00:00"
             });
         });
 
-        // 🔥 SMART DENSE RANKING LOGIC 🔥
+        const totalStudents = students.length;
+        const averageScore = totalStudents > 0 ? Math.round(totalScoreSum / totalStudents) : 0;
+
         students.sort((a, b) => b.score - a.score);
 
         let rankedStudents = [];
@@ -1162,12 +1168,11 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         let currentUserRankData = null;
 
         for (let i = 0; i < students.length; i++) {
-            // अगर स्कोर पिछले वाले से कम है, तभी रैंक 1 बढ़ाओ (सेम स्कोर = सेम रैंक)
             if (previousScore !== null && students[i].score < previousScore) {
                 currentRank++;
             }
             
-            const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score };
+            const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score, time: students[i].timeTaken };
             rankedStudents.push(rankObj);
             previousScore = students[i].score;
 
@@ -1176,13 +1181,16 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             }
         }
 
-        // 🔥 सिर्फ Top 10 बच्चों को फ्रंटएंड पर भेजो (ताकि डेटाबेस और नेटवर्क का लोड कम रहे)
+        const topperScore = rankedStudents.length > 0 ? rankedStudents[0].score : 0;
         const top10Ranked = rankedStudents.filter(s => s.rank <= 10);
         const totalQs = Array.isArray(classDoc.data().quizData) ? classDoc.data().quizData.length : 0;
 
         res.status(200).json({
             success: true,
             maxScore: totalQs,
+            totalStudents: totalStudents,
+            averageScore: averageScore,
+            topperScore: topperScore,
             top10: top10Ranked,
             userRank: currentUserRankData
         });
@@ -1406,7 +1414,36 @@ app.post('/api/v1/kick-student', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 10. VERIFY ₹10 MICRO-PAYMENT & SPLIT COMMISSION 🔥
+// 🔥 10.A CREATE MICRO-PAYMENT ORDER (DYNAMIC FEE) 🔥
+// =======================================================================
+app.post('/api/v1/create-micro-order', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Please log in." });
+        
+        const { testCode } = req.body;
+        
+        // 🚨 BACKEND SECURITY: Frontend se price mat lo, DB se check karo!
+        const examDoc = await db.collection('LiveExams').doc(testCode).get();
+        if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
+        
+        const testFee = Number(examDoc.data().fee) || 10; // Default to 10 if fee field is missing
+        
+        const options = {
+            amount: testFee * 100, // paise me
+            currency: "INR",
+            receipt: `TEST_${testCode}_${req.user.uid.substring(0, 5)}`
+        };
+        
+        const order = await razorpay.orders.create(options);
+        res.status(200).json({ success: true, order, fee: testFee });
+    } catch (error) {
+        console.error("Micro-Order Error:", error);
+        res.status(500).json({ success: false, error: "Failed to generate payment." });
+    }
+});
+
+// =======================================================================
+// 🔥 10.B VERIFY MICRO-PAYMENT & DYNAMIC COMMISSION SPLIT 🔥
 // =======================================================================
 app.post('/api/v1/verify-micro-payment', async (req, res) => {
     try {
@@ -1422,16 +1459,19 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Signature mismatch. Payment failed." });
         }
 
-        // 1. Update Student Profile (Unlock the test securely via Backend)
+        // 1. Update Student Profile (Unlock the test securely)
         const studentRef = db.collection('users').doc(req.user.uid);
-        await studentRef.set({
-            unlockedTests: admin.firestore.FieldValue.arrayUnion(testCode)
-        }, { merge: true });
+        await studentRef.set({ unlockedTests: admin.firestore.FieldValue.arrayUnion(testCode) }, { merge: true });
 
-        // 2. Pay The Teacher (Dynamic Commission: 40% = ₹4)
+        // 2. Fetch exact test fee from DB to calculate commission
+        const examDoc = await db.collection('LiveExams').doc(testCode).get();
+        const testFee = examDoc.exists ? (Number(examDoc.data().fee) || 10) : 10;
+
+        // 3. Pay The Teacher (Dynamic Commission: 40%)
         const COMMISSION_RATE = 0.40; 
         if (teacherUid) {
-            const teacherEarned = 10 * COMMISSION_RATE; // ₹4
+            const teacherEarned = testFee * COMMISSION_RATE; // e.g., 40% of 20 = ₹8
+            
             const teacherRef = db.collection('users').doc(teacherUid);
             await teacherRef.set({
                 totalEarnings: admin.firestore.FieldValue.increment(teacherEarned)
@@ -1439,7 +1479,7 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
 
             await db.collection('users').doc(teacherUid).collection('notifications').add({
                 title: "💰 You got Paid!",
-                message: `A student unlocked your test (${testCode}). You earned ₹${teacherEarned}.`,
+                message: `A student unlocked your test (${testCode}). You earned ₹${teacherEarned.toFixed(2)}.`,
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 read: false
             });
@@ -1447,7 +1487,7 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
 
         res.status(200).json({ success: true, message: "Test unlocked successfully!" });
     } catch (error) {
-        console.error("🚨 Micro-Payment Error:", error);
+        console.error("🚨 Micro-Payment Verify Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
