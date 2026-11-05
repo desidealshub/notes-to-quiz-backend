@@ -750,19 +750,23 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 2. TEACHER CREATES A GROUP TEST (With Uploads, AI, Refund & SK Code) 🔥
+// 🔥 2. TEACHER CREATES A GROUP TEST 
 // =======================================================================
 app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => {
     let requiredCredits = 0;
     let creditsDeducted = false;
     const userId = req.user ? req.user.uid : 'guest_user';
+    
+    // 🚨 THE MASTER FIX: userPlan को try ब्लॉक के बाहर सबसे ऊपर डिक्लेअर कर!
+    let userPlan = 'Free'; 
 
     try {
         if (userId === 'guest_user') {
             return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
         }
-
+        
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
+        // ... बाकि का तेरा पूरा पुराना कोड यहाँ से आगे वैसे ही रहेगा ...
         const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents, allowedRolls } = config;
         const capacity = Number(maxStudents) || 50;
         let qCount = Number(questionCount) || 15;
