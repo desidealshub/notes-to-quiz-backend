@@ -858,11 +858,12 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             requireRoll: Boolean(requireRoll),
             requirePhone: Boolean(requirePhone),
             maxStudents: capacity,
-            expiresAt: expiresAt,
+            expiresAt: expiresAt, 
             quizData: quizArray, 
-            // 🔥 The Masterstroke Logic:
-            requiresPayment: isPremiumTeacher, // Agar teacher premium hai, to test paid hoga
-            allowedRolls: isPremiumTeacher ? [] : (allowedRolls || []), // Premium me roster ki jarurat nahi
+            requiresPayment: isPremiumTeacher, 
+            fee: isPremiumTeacher ? (Number(fee) || 10) : 0, 
+            // 🔥 THE MASTER FIX: Normal teacher ki list save hogi, Premium ka empty jayega kyunki paisa hi gatekeeper hai!
+            allowedRolls: isPremiumTeacher ? [] : (Array.isArray(allowedRolls) ? allowedRolls : []), 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
