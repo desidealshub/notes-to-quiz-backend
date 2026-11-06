@@ -375,24 +375,22 @@ app.post('/api/v1/support-ticket', async (req, res) => {
     }
 });
 
-// 🔥 FETCH PREVIOUS SUPPORT TICKETS (HACK-PROOF) 🔥
+// 🔥 FETCH PREVIOUS SUPPORT TICKETS (PERMANENT FIX) 🔥
 app.get('/api/v1/my-tickets', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(200).json({ success: true, tickets: [] });
         }
-
-        // Token verify karke asli UID nikalo
         const idToken = authHeader.split('Bearer ')[1];
         const decodedToken = await admin.auth().verifyIdToken(idToken);
         const uid = decodedToken.uid;
 
-        // 🚨 100% SECURE: Sirf usi UID ki tickets nikalo jo token se verify hui hai
+        // PERMANENT FIX: orderBy wapas add kar diya
         const snapshot = await db.collection('SupportTickets')
             .where('uid', '==', uid)
             .orderBy('createdAt', 'desc')
-            .limit(10)
+            .limit(20) 
             .get();
 
         let myTickets = [];
@@ -407,11 +405,11 @@ app.get('/api/v1/my-tickets', async (req, res) => {
                 date: new Date(createdMs).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
             });
         });
-
+        
         res.status(200).json({ success: true, tickets: myTickets });
     } catch (error) {
         console.error("🚨 Fetch Tickets Error:", error);
-        res.status(500).json({ success: false, error: "Failed to fetch tickets. Invalid Session." });
+        res.status(500).json({ success: false, error: "Failed to fetch tickets." });
     }
 });
 
