@@ -1509,8 +1509,10 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
             const teacherEarned = testFee * COMMISSION_RATE; // e.g., 40% of 20 = ₹8
             
             const teacherRef = db.collection('users').doc(teacherUid);
+            // 🔥 YAHAN FIX KIYA HAI: totalEarnings ke saath walletBalance bhi badhega 🔥
             await teacherRef.set({
-                totalEarnings: admin.firestore.FieldValue.increment(teacherEarned)
+                totalEarnings: admin.firestore.FieldValue.increment(teacherEarned),
+                walletBalance: admin.firestore.FieldValue.increment(teacherEarned) 
             }, { merge: true });
 
             await db.collection('users').doc(teacherUid).collection('notifications').add({
@@ -1524,6 +1526,93 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
         res.status(200).json({ success: true, message: "Test unlocked successfully!" });
     } catch (error) {
         console.error("🚨 Micro-Payment Verify Error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =======================================================================
+// 🔥 10.C TEACHER WALLET PAYOUT REQUEST (100% SECURE) 🔥
+// =======================================================================
+app.post('/api/v1/request-payout', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized." });
+        }
+        
+        const { upiId } = req.body;
+        if (!upiId || !upiId.includes('@')) {
+            return res.status(400).json({ success: false, error: "Invalid UPI ID." });
+        }
+
+        // 1. Check real balance from database (Frontend pe trust nahi karna)
+        const teacherRef = db.collection('users').doc(req.user.uid);
+        const teacherDoc = await teacherRef.get();
+        
+        if (!teacherDoc.exists) {
+            return res.status(404).json({ success: false, error: "Teacher profile not found." });
+        }
+
+        const teacherData = teacherDoc.data();
+        const currentBalance = teacherData.walletBalance || 0;
+
+        if (currentBalance < 500) {
+            return res.status(400).json({ success: false, error: `Minimum withdrawal is ₹500. Your actual balance is ₹${currentBalance}.` });
+        }
+
+        // 2. Batch write for atomicity (Paise kate toh request bhi bane, warna kuch na ho)
+        const batch = db.batch();
+        
+        const payoutRef = db.collection('PayoutRequests').doc();
+        batch.set(payoutRef, {
+            teacherUid: req.user.uid,
+            teacherName: teacherData.name || 'Educator',
+            upiId: upiId,
+            amount: currentBalance,
+            status: 'Pending',
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        batch.update(teacherRef, {
+            walletBalance: 0
+        });
+
+        await batch.commit();
+
+        res.status(200).json({ success: true, message: "Payout requested successfully!" });
+    } catch (error) {
+        console.error("🚨 Payout Request Error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =======================================================================
+// 🔥 10.D BAN / REMOVE STUDENT FROM CLASS (100% SECURE) 🔥
+// =======================================================================
+app.post('/api/v1/ban-student', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized." });
+        }
+        
+        const { studentUid } = req.body;
+        if (!studentUid) {
+            return res.status(400).json({ success: false, error: "Student UID is required." });
+        }
+
+        const teacherUid = req.user.uid;
+        const teacherRef = db.collection('users').doc(teacherUid);
+
+        // 1. Add student to banned list
+        await teacherRef.set({
+            bannedStudents: admin.firestore.FieldValue.arrayUnion(studentUid)
+        }, { merge: true });
+
+        // 2. Remove student from active CRM list
+        await teacherRef.collection('my_students').doc(studentUid).delete();
+
+        res.status(200).json({ success: true, message: "Student banned successfully!" });
+    } catch (error) {
+        console.error("🚨 Ban Student Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
