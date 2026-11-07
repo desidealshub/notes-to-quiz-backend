@@ -846,8 +846,8 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         
         const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
 
-        // 💾 5. SAVE TO DATABASE (WITH HYBRID PREMIUM LOGIC)
-        const isPremiumTeacher = (userPlan === 'Institute'); // Sirf Institute plan walo ke tests par ₹10 ka lock lagega
+        // 💾 5. SAVE TO DATABASE (WITH FIXED PREMIUM LOGIC)
+        const isPremiumTeacher = Number(fee) > 0; // 🔥 FIX: Fee 0 se jyada hai to test premium banega
 
         await db.collection('LiveExams').doc(generatedCode).set({
             code: generatedCode,
@@ -863,13 +863,11 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             expiresAt: expiresAt, 
             quizData: quizArray, 
             requiresPayment: isPremiumTeacher, 
-            fee: isPremiumTeacher ? (Number(fee) || 10) : 0, 
-            // 🔥 THE MASTER FIX: Normal teacher ki list save hogi, Premium ka empty jayega kyunki paisa hi gatekeeper hai!
-            allowedRolls: isPremiumTeacher ? [] : (Array.isArray(allowedRolls) ? allowedRolls : []), 
+            fee: isPremiumTeacher ? Number(fee) : 0, 
+            allowedRolls: (Array.isArray(allowedRolls) ? allowedRolls : []), 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
-
         // 🔥 Notification for Teacher
         await db.collection('users').doc(req.user.uid).collection('notifications').add({
             title: "Test Created Successfully! 🎉",
