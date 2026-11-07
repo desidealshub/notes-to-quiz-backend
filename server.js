@@ -1652,7 +1652,7 @@ app.get('/api/v1/notifications', async (req, res) => {
                 read: data.read,
                 date: data.timestamp ? new Date(data.timestamp.toDate()).toLocaleDateString() : "Just now"
             });
-            doc.ref.update({ read: true }); // Auto-mark as read
+            // 🔥 यहाँ से 'doc.ref.update({ read: true });' हटा दिया है ताकि सर्वर फ़ास्ट रहे! 🔥
         });
 
         res.status(200).json({ success: true, notifications });
@@ -1660,6 +1660,30 @@ app.get('/api/v1/notifications', async (req, res) => {
         console.error("🚨 Notifications Fetch Error:", error);
         res.status(500).json({ success: false, error: "Failed to fetch notifications." });
     }
+});
+
+// 👇 YAHAN PASTE KIYA HAI NAYA API 👇
+// 🔥 NOTIFICATION MARK AS READ API
+app.post('/api/v1/notifications/mark-read', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') return res.status(200).json({ success: true });
+        
+        const snapshot = await db.collection('users').doc(req.user.uid).collection('notifications')
+            .where('read', '==', false).get();
+            
+        const batch = db.batch();
+        snapshot.forEach(doc => batch.update(doc.ref, { read: true }));
+        await batch.commit();
+        
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false });
+    }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 Production Server running on port ${PORT}`);
 });
 
 const PORT = process.env.PORT || 5000;
