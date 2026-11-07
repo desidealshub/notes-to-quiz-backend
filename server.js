@@ -864,7 +864,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             quizData: quizArray, 
             requiresPayment: isPremiumTeacher, 
             fee: isPremiumTeacher ? Number(fee) : 0, 
-            allowedRolls: (Array.isArray(allowedRolls) ? allowedRolls : []), 
+            allowedRolls: isPremiumTeacher ? [] : (Array.isArray(allowedRolls) ? allowedRolls : []),
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
