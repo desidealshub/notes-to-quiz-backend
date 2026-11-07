@@ -1318,14 +1318,14 @@ app.post('/api/v1/create-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 8. RAZORPAY PAYMENT VERIFICATION & COMMISSION TRACKING 🔥
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION (HACK-PROOF CREDITS) 🔥
 // =======================================================================
 app.post('/api/v1/verify-payment', async (req, res) => {
     try {
         if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
         
-        // 🔥 Front-end se 'couponUsed' aur 'amountPaid' bhi aayega
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, creditsToAdd, phone, originalPlanAmount, amountPaid, couponUsed } = req.body;
+        // 🔥 FIX: 'creditsToAdd' ko frontend se hataya! Hacker ab F12 se credits nahi badha sakta.
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, phone, originalPlanAmount, amountPaid, couponUsed } = req.body;
 
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -1335,19 +1335,35 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        let upgradedPlan = 'Starter';
-        const added = Number(creditsToAdd);
-        if (added >= 250 && added < 600) upgradedPlan = 'Pro';
-        else if (added >= 600 && added < 2000) upgradedPlan = 'Elite';
-        else if (added >= 2000) upgradedPlan = 'Institute';
+        // 🚨 THE VAULT: Backend decides credits based on the actual plan amount selected 🚨
+        const planAmount = Number(originalPlanAmount);
+        let baseCreditsToAdd = 0;
+        let upgradedPlan = 'Free';
+
+        if (planAmount === 49) {
+            baseCreditsToAdd = 100;
+            upgradedPlan = 'Starter';
+        } else if (planAmount === 99) {
+            baseCreditsToAdd = 250;
+            upgradedPlan = 'Pro';
+        } else if (planAmount === 199) {
+            baseCreditsToAdd = 600;
+            upgradedPlan = 'Elite';
+        } else if (planAmount === 499) {
+            baseCreditsToAdd = 2000;
+            upgradedPlan = 'Institute';
+        } else {
+            return res.status(400).json({ success: false, error: "Security Alert: Invalid plan amount detected." });
+        }
 
         const userRef = db.collection('users').doc(req.user.uid);
         const userDoc = await userRef.get();
         const userData = userDoc.data() || {};
         
-        let finalCreditsToAdd = added;
+        let finalCreditsToAdd = baseCreditsToAdd;
         let bonusMessage = "";
 
+        // Referral Bonus Logic
         if (userData.hasMadePurchase === false && userData.referredBy) {
             finalCreditsToAdd += 50; 
             bonusMessage = " (+50 Referral Bonus!)";
@@ -1357,7 +1373,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             } catch (e) { console.error("⚠️ Referrer update failed:", e); }
         }
 
-        // 1. Update Buyer Account
+        // 1. Update Buyer Account Securely
         await userRef.set({
             credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
             plan: upgradedPlan,
@@ -1366,21 +1382,19 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             lastUpdated: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
-        // 🚨 2. TEACHER COMMISSION TRACKING (FIREBASE LOGGING) 🚨
-        // Ye tere admin logic ke liye 'successful_payments' collection banayega
+        // 2. TEACHER COMMISSION TRACKING
         try {
             await db.collection('successful_payments').add({
                 uid: req.user.uid,
                 email: req.user.email,
-                originalPlan: Number(originalPlanAmount) || 0, // ₹199 or ₹499
-                amountPaid: Number(amountPaid) || 0,           // ₹159.20 (discounted)
-                couponUsed: couponUsed ? xss(couponUsed.toUpperCase()) : 'NONE', // Kis teacher ka code tha?
+                originalPlan: planAmount,
+                amountPaid: Number(amountPaid) || 0,
+                couponUsed: couponUsed ? xss(couponUsed.toUpperCase()) : 'NONE', 
                 razorpay_payment_id: razorpay_payment_id,
                 timestamp: admin.firestore.FieldValue.serverTimestamp()
             });
-            console.log(`✅ Payment logged for Commission Tracking. Code: ${couponUsed || 'NONE'}`);
         } catch (dbErr) {
-            console.error("⚠️ Failed to log payment for commission, but user upgraded successfully.", dbErr);
+            console.error("⚠️ Failed to log payment for commission.", dbErr);
         }
 
         res.status(200).json({ 
@@ -1394,6 +1408,7 @@ app.post('/api/v1/verify-payment', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
 // =======================================================================
 // 🔥 9. KICK STUDENT FROM GROUP TEST (FREE UP SEAT) 🔥
 // =======================================================================
