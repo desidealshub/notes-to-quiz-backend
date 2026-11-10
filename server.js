@@ -888,7 +888,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             read: false
         });
 
-        res.status(200).json({ success: true, code: generatedCode, expiresAt });
+        res.status(200).json({ success: true, code: generatedCode, expiresAt: finalExpiresAt });
 
     } catch (error) {
         console.error("🚨 Class Creation Error:", error);
