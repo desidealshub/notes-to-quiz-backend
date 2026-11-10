@@ -844,11 +844,23 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase(); 
         const generatedCode = `SK${randomHex}`; 
         
-        const expiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000);
+        // 🚨 1. क्या इस टेस्ट के लिए बच्चों से पैसे लेने हैं? (सिर्फ तभी जब फीस 0 से ज़्यादा हो)
+        const isPremiumTest = Number(fee) > 0; 
+        
+        // 🚨 2. क्या टीचर खुद किसी पेड/प्रीमियम प्लान पर है? (Free को छोड़कर कोई भी प्लान)
+        const isPremiumTeacher = (userPlan !== 'Free');
 
-        // 💾 5. SAVE TO DATABASE (WITH FIXED PREMIUM LOGIC)
-        const isPremiumTeacher = Number(fee) > 0; // 🔥 FIX: Fee 0 se jyada hai to test premium banega
+        // 🔥 THE LIFETIME FIX: अगर टीचर प्रीमियम है, तो उसके सारे टेस्ट (फ्री हो या पेड) कभी एक्सपायर नहीं होंगे! 🔥
+        let finalExpiresAt;
+        if (isPremiumTeacher) {
+            // 100 साल (Never Expire)
+            finalExpiresAt = Date.now() + (100 * 365 * 24 * 60 * 60 * 1000); 
+        } else {
+            // फ्री प्लान वाले टीचर का टेस्ट नॉर्मल टाइम पर एक्सपायर होगा
+            finalExpiresAt = Date.now() + (Number(expiryHours) * 60 * 60 * 1000); 
+        }
 
+        // 💾 5. SAVE TO DATABASE
         await db.collection('LiveExams').doc(generatedCode).set({
             code: generatedCode,
             name: safeName,
@@ -860,11 +872,11 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             requireRoll: Boolean(requireRoll),
             requirePhone: Boolean(requirePhone),
             maxStudents: capacity,
-            expiresAt: expiresAt, 
+            expiresAt: finalExpiresAt, // 👈 टीचर के प्लान के हिसाब से एक्सपायरी
             quizData: quizArray, 
-            requiresPayment: isPremiumTeacher, 
-            fee: isPremiumTeacher ? Number(fee) : 0, 
-            allowedRolls: isPremiumTeacher ? [] : (Array.isArray(allowedRolls) ? allowedRolls : []),
+            requiresPayment: isPremiumTest, // 👈 टेस्ट पेड है या नहीं, ये fee से तय होगा
+            fee: isPremiumTest ? Number(fee) : 0, 
+            allowedRolls: isPremiumTest ? [] : (Array.isArray(allowedRolls) ? allowedRolls : []),
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
