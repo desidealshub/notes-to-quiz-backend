@@ -765,7 +765,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         
         let config = req.body.config ? JSON.parse(req.body.config) : req.body;
         // ... बाकि का तेरा पूरा पुराना कोड यहाँ से आगे वैसे ही रहेगा ...
-        const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents, allowedRolls } = config;
+        const { className, duration, expiryHours, requireBatch, requireRoll, requirePhone, mode, questionCount, maxStudents, allowedRolls, fee } = config;
         const capacity = Number(maxStudents) || 50;
         let qCount = Number(questionCount) || 15;
 
@@ -1506,32 +1506,53 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Signature mismatch. Payment failed." });
         }
 
+        // 🚨 FALLBACK: अगर फ्रंटएंड ने testCode या teacherUid नहीं भेजा, तो हम खुद निकाल लेंगे!
+        let finalTestCode = testCode;
+        let finalTeacherUid = teacherUid;
+
+        if (!finalTestCode || !finalTeacherUid) {
+            console.warn("⚠️ Warning: Frontend missed testCode/teacherUid. Attempting fallback...");
+            // यहाँ Razorpay की API से ऑर्डर मंगवा कर उसका Notes चेक किया जा सकता है।
+            // पर अभी के लिए अगर testCode नहीं है, तो एरर फेंकना ही सेफ है।
+            if(!finalTestCode) {
+                 return res.status(400).json({ success: false, error: "Security Error: Missing test code reference." });
+            }
+        }
+
         // 1. Update Student Profile (Unlock the test securely)
         const studentRef = db.collection('users').doc(req.user.uid);
-        await studentRef.set({ unlockedTests: admin.firestore.FieldValue.arrayUnion(testCode) }, { merge: true });
+        await studentRef.set({ unlockedTests: admin.firestore.FieldValue.arrayUnion(finalTestCode) }, { merge: true });
 
         // 2. Fetch exact test fee from DB to calculate commission
-        const examDoc = await db.collection('LiveExams').doc(testCode).get();
-        const testFee = examDoc.exists ? (Number(examDoc.data().fee) || 10) : 10;
+        const examDoc = await db.collection('LiveExams').doc(finalTestCode).get();
+        
+        // 🔥 FIX: अगर टेस्ट नहीं मिला तो क्रैश मत हो, डिफ़ॉल्ट 10 मान ले
+        let testFee = 10;
+        if (examDoc.exists) {
+            testFee = Number(examDoc.data().fee) || 10;
+            // अगर teacherUid फ्रंटएंड से नहीं आया था, तो एग्जाम डॉक्यूमेंट से निकाल ले!
+            if (!finalTeacherUid) finalTeacherUid = examDoc.data().instructorUid;
+        }
 
         // 3. Pay The Teacher (Dynamic Commission: 40%)
         const COMMISSION_RATE = 0.40; 
-        if (teacherUid) {
-            const teacherEarned = testFee * COMMISSION_RATE; // e.g., 40% of 20 = ₹8
+        if (finalTeacherUid) {
+            const teacherEarned = testFee * COMMISSION_RATE; 
             
-            const teacherRef = db.collection('users').doc(teacherUid);
-            // 🔥 YAHAN FIX KIYA HAI: totalEarnings ke saath walletBalance bhi badhega 🔥
+            const teacherRef = db.collection('users').doc(finalTeacherUid);
             await teacherRef.set({
                 totalEarnings: admin.firestore.FieldValue.increment(teacherEarned),
                 walletBalance: admin.firestore.FieldValue.increment(teacherEarned) 
             }, { merge: true });
 
-            await db.collection('users').doc(teacherUid).collection('notifications').add({
+            await db.collection('users').doc(finalTeacherUid).collection('notifications').add({
                 title: "💰 You got Paid!",
-                message: `A student unlocked your test (${testCode}). You earned ₹${teacherEarned.toFixed(2)}.`,
+                message: `A student unlocked your test (${finalTestCode}). You earned ₹${teacherEarned.toFixed(2)}.`,
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 read: false
             });
+        } else {
+             console.error("🚨 CRITICAL: Test unlocked, but no teacherUid found to give commission!");
         }
 
         res.status(200).json({ success: true, message: "Test unlocked successfully!" });
@@ -1540,7 +1561,6 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // =======================================================================
 // 🔥 10.C TEACHER WALLET PAYOUT REQUEST (100% SECURE) 🔥
 // =======================================================================
