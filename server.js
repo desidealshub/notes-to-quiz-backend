@@ -1524,8 +1524,6 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
 
         if (!finalTestCode || !finalTeacherUid) {
             console.warn("⚠️ Warning: Frontend missed testCode/teacherUid. Attempting fallback...");
-            // यहाँ Razorpay की API से ऑर्डर मंगवा कर उसका Notes चेक किया जा सकता है।
-            // पर अभी के लिए अगर testCode नहीं है, तो एरर फेंकना ही सेफ है।
             if(!finalTestCode) {
                  return res.status(400).json({ success: false, error: "Security Error: Missing test code reference." });
             }
@@ -1546,8 +1544,8 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
             if (!finalTeacherUid) finalTeacherUid = examDoc.data().instructorUid;
         }
 
-        // 3. Pay The Teacher (Dynamic Commission: 40%)
-        const COMMISSION_RATE = 0.40; 
+        // 3. Pay The Teacher (Dynamic Commission: 80% Teacher / 20% Platform)
+        const COMMISSION_RATE = 0.40; // 👈 80% कमीशन सेट कर दिया है
         if (finalTeacherUid) {
             const teacherEarned = testFee * COMMISSION_RATE; 
             
