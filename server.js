@@ -1180,10 +1180,9 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         const studentName = req.query.name ? xss(req.query.name.trim()) : null;
 
         const [classDoc, historySnapshot] = await Promise.all([
-            db.collection('LiveExams').doc(classCode).select('quizData').get(),
+            db.collection('LiveExams').doc(classCode).get(),
             db.collection('history').where('groupCode', '==', classCode).select('candidateDetails', 'score', 'time').get()
         ]);
-
         if (!classDoc.exists) {
             return res.status(404).json({ success: false, error: "Class not found." });
         }
@@ -1220,7 +1219,7 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             rankedStudents.push(rankObj);
             previousScore = students[i].score;
 
-            if (studentName && students[i].name.toLowerCase() === studentName.toLowerCase()) {
+            if (studentName && students[i].name && students[i].name.toLowerCase() === studentName.toLowerCase()) {
                 if (!currentUserRankData) currentUserRankData = rankObj;
             }
         }
