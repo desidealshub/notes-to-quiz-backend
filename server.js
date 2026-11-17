@@ -1261,6 +1261,7 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             const sc = Number(doc.data().score) || 0;
             totalScoreSum += sc;
             students.push({ 
+                uid: doc.data().userId || doc.id, // 🔥 BUG 3 FIX: Fetch specific UID
                 name: doc.data().candidateDetails?.name || "Student", 
                 score: sc,
                 timeTaken: doc.data().time || "00:00"
