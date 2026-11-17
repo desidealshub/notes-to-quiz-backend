@@ -880,13 +880,48 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'active'
         });
-        // 🔥 Notification for Teacher
+        
+        // 🔥 Notification for Teacher (Cleaned Message - No Code)
         await db.collection('users').doc(req.user.uid).collection('notifications').add({
             title: "Test Created Successfully! 🎉",
-            message: `Your new class "${safeName}" is ready. Share Code: ${generatedCode}`,
+            message: `"${safeName}" has been successfully generated and notification sent to all your students. 🚀`,
             timestamp: admin.firestore.FieldValue.serverTimestamp(),
             read: false
         });
+
+        // 🔥 THE MAGIC: NOTIFY ALL CONNECTED STUDENTS IN BULK 🔥
+        try {
+            const myStudentsSnap = await db.collection('users').doc(req.user.uid).collection('my_students').get();
+            if (!myStudentsSnap.empty) {
+                const batch = db.batch();
+                let notiCount = 0;
+                
+                myStudentsSnap.forEach(studentDoc => {
+                    const studentUid = studentDoc.id;
+                    const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
+                    
+                    batch.set(studentNotiRef, {
+                        title: "📝 New Test Assigned!",
+                        message: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
+                        testCode: generatedCode, // Frontend will use this to direct jump
+                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                        read: false
+                    });
+                    
+                    notiCount++;
+                    // Firestore batch limit is 500. If you have more students, commit and start a new batch.
+                    if (notiCount === 490) {
+                        batch.commit();
+                        notiCount = 0;
+                    }
+                });
+                
+                if (notiCount > 0) await batch.commit();
+                console.log(`✅ Push Notification sent to ${myStudentsSnap.size} students for test ${safeName}`);
+            }
+        } catch (pushErr) {
+            console.error("🚨 Failed to push notifications to students:", pushErr);
+        }
 
         res.status(200).json({ success: true, code: generatedCode, expiresAt: finalExpiresAt });
 
@@ -913,7 +948,6 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         res.status(500).json({ success: false, error: error.message || "Failed to generate class. Check files." });
     }
 });
-
 // =======================================================================
 // 🔥 3. STUDENT JOINS A CLASS (Verify Code) 🔥
 // =======================================================================
