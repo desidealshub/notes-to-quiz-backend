@@ -1287,8 +1287,12 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             rankedStudents.push(rankObj);
             previousScore = students[i].score;
 
-            if (studentName && students[i].name && students[i].name.toLowerCase() === studentName.toLowerCase()) {
+            // 🔥 BUG 3 FIX: Match strictly by UID instead of Name
+            const reqUid = req.query.uid;
+            if (reqUid && students[i].uid === reqUid) {
                 if (!currentUserRankData) currentUserRankData = rankObj;
+            } else if (!reqUid && studentName && students[i].name && students[i].name.toLowerCase() === studentName.toLowerCase()) {
+                if (!currentUserRankData) currentUserRankData = rankObj; // Fallback for old requests
             }
         }
 
@@ -1575,7 +1579,7 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
     try {
         if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
         
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testCode, teacherUid } = req.body;
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testCode, teacherUid, testName } = req.body;
 
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -1589,30 +1593,33 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
         let finalTestCode = testCode;
         let finalTeacherUid = teacherUid;
 
-        if (!finalTestCode || !finalTeacherUid) {
-            console.warn("⚠️ Warning: Frontend missed testCode/teacherUid. Attempting fallback...");
-            if(!finalTestCode) {
-                 return res.status(400).json({ success: false, error: "Security Error: Missing test code reference." });
-            }
+        if (!finalTestCode) {
+            console.warn("⚠️ Warning: Frontend missed testCode. Attempting fallback...");
+            return res.status(400).json({ success: false, error: "Security Error: Missing test code reference." });
         }
 
         // 1. Update Student Profile (Unlock the test securely)
         const studentRef = db.collection('users').doc(req.user.uid);
         await studentRef.set({ unlockedTests: admin.firestore.FieldValue.arrayUnion(finalTestCode) }, { merge: true });
 
-        // 2. Fetch exact test fee from DB to calculate commission
+        // 2. Fetch exact test fee and NAME from DB to calculate commission & notifications
         const examDoc = await db.collection('LiveExams').doc(finalTestCode).get();
         
-        // 🔥 FIX: अगर टेस्ट नहीं मिला तो क्रैश मत हो, डिफ़ॉल्ट 10 मान ले
         let testFee = 10;
+        let finalTestName = "Premium Test"; // 🔥 Added Test Name Fallback
+        
         if (examDoc.exists) {
             testFee = Number(examDoc.data().fee) || 10;
+            finalTestName = examDoc.data().name || "Premium Test"; // Get exact name
             // अगर teacherUid फ्रंटएंड से नहीं आया था, तो एग्जाम डॉक्यूमेंट से निकाल ले!
             if (!finalTeacherUid) finalTeacherUid = examDoc.data().instructorUid;
+        } else if (testName) {
+            finalTestName = testName; // Fallback to what frontend sent
         }
 
-        // 3. Pay The Teacher (Dynamic Commission: 80% Teacher / 20% Platform)
-        const COMMISSION_RATE = 0.40; // 👈 80% कमीशन सेट कर दिया है
+        // 3. Pay The Teacher (Dynamic Commission: 50% Teacher / 50% Platform)
+        const COMMISSION_RATE = 0.50; // 🔥 Updated to 50% 
+        
         if (finalTeacherUid) {
             const teacherEarned = testFee * COMMISSION_RATE; 
             
@@ -1622,14 +1629,40 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
                 walletBalance: admin.firestore.FieldValue.increment(teacherEarned) 
             }, { merge: true });
 
+            // Notification for Teacher
             await db.collection('users').doc(finalTeacherUid).collection('notifications').add({
                 title: "💰 You got Paid!",
-                message: `A student unlocked your test (${finalTestCode}). You earned ₹${teacherEarned.toFixed(2)}.`,
+                message: `A student unlocked your test (${finalTestName}). You earned ₹${teacherEarned.toFixed(2)}.`,
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 read: false
             });
         } else {
              console.error("🚨 CRITICAL: Test unlocked, but no teacherUid found to give commission!");
+        }
+
+        // 4. Notification for Student (Receipt) 🔥 NEW 🔥
+        await db.collection('users').doc(req.user.uid).collection('notifications').add({
+            title: "✅ Payment Successful!",
+            message: `You paid ₹${testFee} to unlock "${finalTestName}". You can now start the test.`,
+            testCode: finalTestCode,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            read: false
+        });
+
+        // 🚀 BUG 5 FIX: SAVE TO SUCCESSFUL_PAYMENTS SO SUPERADMIN CAN TRACK REVENUE 🚀
+        try {
+            await db.collection('successful_payments').add({
+                uid: req.user.uid,
+                email: req.user.email || 'student@notestoquiz.in',
+                originalPlan: testFee,
+                amountPaid: testFee,
+                couponUsed: 'MICRO_PAYMENT',
+                razorpay_payment_id: razorpay_payment_id,
+                teacherUid: finalTeacherUid,
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
+        } catch (dbErr) {
+            console.error("⚠️ Failed to log micro-payment for Admin Dashboard.", dbErr);
         }
 
         res.status(200).json({ success: true, message: "Test unlocked successfully!" });
