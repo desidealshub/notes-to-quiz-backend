@@ -889,35 +889,68 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             read: false
         });
 
-        // 🔥 THE MAGIC: NOTIFY ALL CONNECTED STUDENTS IN BULK 🔥
+        // 🔥 THE MAGIC: IN-APP + PUSH NOTIFICATIONS FOR ALL CONNECTED STUDENTS 🔥
         try {
             const myStudentsSnap = await db.collection('users').doc(req.user.uid).collection('my_students').get();
             if (!myStudentsSnap.empty) {
                 const batch = db.batch();
+                const fcmTokens = []; // डिवाइस पर पुश करने के लिए टोकन्स की लिस्ट
                 let notiCount = 0;
                 
-                myStudentsSnap.forEach(studentDoc => {
-                    const studentUid = studentDoc.id;
-                    const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
-                    
-                    batch.set(studentNotiRef, {
-                        title: "📝 New Test Assigned!",
-                        message: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
-                        testCode: generatedCode, // Frontend will use this to direct jump
-                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                        read: false
-                    });
-                    
-                    notiCount++;
-                    // Firestore batch limit is 500. If you have more students, commit and start a new batch.
-                    if (notiCount === 490) {
-                        batch.commit();
-                        notiCount = 0;
+                // 1. स्टूडेंट्स के UIDs निकालो
+                const studentUids = myStudentsSnap.docs.map(doc => doc.id);
+                
+                // 2. समानांतर (Parallel) तरीके से सारे स्टूडेंट्स के मेन प्रोफाइल से FCM टोकन फेच करो (Super Fast)
+                const userDocs = await Promise.all(studentUids.map(uid => db.collection('users').doc(uid).get()));
+
+                userDocs.forEach(userDoc => {
+                    if (userDoc.exists) {
+                        const studentUid = userDoc.id;
+                        
+                        // A: In-App Notification के लिए DB में सेव करो
+                        const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
+                        batch.set(studentNotiRef, {
+                            title: "📝 New Test Assigned!",
+                            message: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
+                            testCode: generatedCode, 
+                            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                            read: false
+                        });
+                        notiCount++;
+
+                        // B: Push Notification के लिए FCM Token जमा करो
+                        if (userDoc.data().fcmToken) {
+                            fcmTokens.push(userDoc.data().fcmToken);
+                        }
+
+                        // Firestore Limit Check
+                        if (notiCount === 490) {
+                            batch.commit();
+                            notiCount = 0;
+                        }
                     }
                 });
                 
                 if (notiCount > 0) await batch.commit();
-                console.log(`✅ Push Notification sent to ${myStudentsSnap.size} students for test ${safeName}`);
+
+                // 🚀 3. THE REAL PUSH NOTIFICATION 🚀
+                if (fcmTokens.length > 0) {
+                    const payload = {
+                        notification: {
+                            title: "📝 New Test Assigned!",
+                            body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`
+                        },
+                        data: {
+                            testCode: generatedCode, // फ्रंटएंड को पता चलेगा कि किस टेस्ट पर जाना है
+                            click_action: "https://notestoquiz.in"
+                        },
+                        tokens: fcmTokens
+                    };
+                    
+                    // 500 टोकन्स तक एक साथ दागा जा सकता है
+                    const pushResponse = await admin.messaging().sendMulticast(payload);
+                    console.log(`✅ Push sent! Success: ${pushResponse.successCount}, Failed: ${pushResponse.failureCount}`);
+                }
             }
         } catch (pushErr) {
             console.error("🚨 Failed to push notifications to students:", pushErr);
