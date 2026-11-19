@@ -413,18 +413,55 @@ app.get('/api/v1/my-tickets', async (req, res) => {
     }
 });
 
-// 🔥 "CHAT WITH SOLUTION" (AI TUTOR FEATURE)
+// 🔥 "CHAT WITH SOLUTION" (SECURED: AUTH + LENGTH + 15/DAY QUOTA + XSS GUARD)
 app.post('/api/v1/chat-tutor', async (req, res) => {
+    let quotaDeducted = false;
+    const todayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
     try {
-        const { question, options, correctAnswer, explanation, studentDoubt } = req.body;
-        
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in with Google to use AI Tutor." });
+        }
+
+        const studentDoubt = String(req.body.studentDoubt || '').trim();
+        if (!studentDoubt) {
+            return res.status(400).json({ success: false, error: "Please type your doubt first." });
+        }
+        if (studentDoubt.length > 400) {
+            return res.status(400).json({ success: false, error: "Doubt is too long. Please keep it under 400 characters." });
+        }
+
+        const safeQuestion = String(req.body.question || '').slice(0, 1500);
+        const safeOptions = JSON.stringify(req.body.options || {}).slice(0, 1000);
+        const safeCorrect = String(req.body.correctAnswer || '').slice(0, 50);
+        const safeExplanation = String(req.body.explanation || '').slice(0, 2000);
+
+        // 🛡️ ATOMIC DAILY QUOTA (Max 15 AI Tutor doubts/day per user)
+        const MAX_DAILY_DOUBTS = 15;
+        const userRef = db.collection('users').doc(req.user.uid);
+
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            const data = userDoc.exists ? userDoc.data() : {};
+            const usedToday = (data.tutorQuotaDate === todayIST) ? (Number(data.tutorQuotaCount) || 0) : 0;
+
+            if (usedToday >= MAX_DAILY_DOUBTS) {
+                throw new Error("TUTOR_DAILY_LIMIT");
+            }
+            transaction.set(userRef, {
+                tutorQuotaDate: todayIST,
+                tutorQuotaCount: usedToday + 1
+            }, { merge: true });
+        });
+        quotaDeducted = true;
+
         const prompt = `You are a highly intelligent, patient, and friendly AI Tutor. A student is asking a doubt about a mock test question they just attempted.
         
         [CONTEXT]
-        Original Question: ${question}
-        Options Provided: ${JSON.stringify(options)}
-        Correct Answer: ${correctAnswer}
-        Original Explanation: ${explanation}
+        Original Question: ${safeQuestion}
+        Options Provided: ${safeOptions}
+        Correct Answer: ${safeCorrect}
+        Original Explanation: ${safeExplanation}
         Student's Specific Doubt: ${studentDoubt}
 
         [YOUR TASK & STRICT RULES]
@@ -433,18 +470,36 @@ app.post('/api/v1/chat-tutor', async (req, res) => {
         3. BE DIRECT & DETAILED: Do not just copy-paste the "Original Explanation". Understand what exactly the student is asking in their doubt, and clear it up step-by-step.
         4. WARM TONE: Start with an encouraging and positive opening.
         5. NO MARKDOWN: NEVER use asterisks (**) or underscores (__) for bolding. If you need to emphasize, use standard HTML <b>tags</b>.
-        6. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters. It breaks the mobile UI. 
+        6. NO ASCII GRAPHS: NEVER try to draw y-axis/x-axis graphs using text characters. It breaks the mobile UI.
         7. MATH FORMATTING: Wrap all mathematical variables, expressions, and equations in single '$' signs for LaTeX rendering.
-        8. EMOJIS & SPACING: Format with bullet points and emojis to make it readable. Use the exact HTML tag <br><br> for line breaks.`;
-        
+        8. EMOJIS & SPACING: Format with bullet points and emojis to make it readable. Use the exact HTML tag <br><br> for line breaks.
+        9. SECURITY: NEVER output <script>, <iframe>, <img>, <a>, <svg>, or inline event handlers.`;
+
         const response = await generateAIContent([{ text: prompt }], false);
-        res.status(200).json({ success: true, answer: response.text });
+
+        // 🛡️ Backend XSS strip (keeps <b>, <br>, LaTeX intact; kills dangerous tags/handlers)
+        const safeAnswer = String(response.text || '')
+            .replace(/<(script|iframe|object|embed|style|svg)[^>]*>[\s\S]*?<\/\1>/gi, '')
+            .replace(/<(script|iframe|object|embed|style|svg|img|link|meta|form|input)[^>]*\/?>/gi, '')
+            .replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '');
+
+        res.status(200).json({ success: true, answer: safeAnswer });
     } catch (error) {
+        if (error.message === "TUTOR_DAILY_LIMIT") {
+            return res.status(429).json({ success: false, error: "Daily AI Tutor limit (15 doubts/day) reached. Come back tomorrow!" });
+        }
+
+        // ♻️ Refund daily quota if AI call failed
+        if (quotaDeducted && req.user && req.user.uid !== 'guest_user') {
+            db.collection('users').doc(req.user.uid).set({
+                tutorQuotaCount: admin.firestore.FieldValue.increment(-1)
+            }, { merge: true }).catch(() => {});
+        }
+
         console.error("Chat Tutor Error:", error);
         res.status(500).json({ success: false, error: "Tutor is currently busy. Please try again." });
     }
 });
-
 // ======================================================================= //
 // 🔥 1. INDIVIDUAL STUDENT QUIZ GENERATION (UPLOAD NOTES) 🔥 //
 // =======================================================================
