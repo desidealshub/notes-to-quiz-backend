@@ -46,10 +46,28 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Configure multer for memory storage (Max 10MB per file)
-const upload = multer({ 
+// 🛡️ SECURE MULTER: Only Images/PDF, Max 3MB per file, Max 6 files (Stops 512MB Render OOM Crash)
+const ALLOWED_UPLOAD_MIMES = new Set([
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/webp',
+    'application/pdf'
+]);
+
+const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 } 
+    limits: {
+        fileSize: 3 * 1024 * 1024, // 3MB max per file
+        files: 6                   // Max 6 files per request
+    },
+    fileFilter: (req, file, cb) => {
+        if (ALLOWED_UPLOAD_MIMES.has((file.mimetype || '').toLowerCase())) {
+            cb(null, true);
+        } else {
+            cb(new Error('INVALID_FILE_TYPE'));
+        }
+    }
 });
 
 // ==========================================
@@ -125,6 +143,22 @@ const apiLimiter = rateLimit({
     legacyHeaders: false, 
 });
 app.use('/api/', apiLimiter);
+
+// 🛡️ STRICT AI ROUTE LIMITER (Stops automated Gemini API burn)
+const aiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 18,                  // Max 18 AI calls per IP per 15 mins
+    message: {
+        success: false,
+        error: "⏳ Too many AI requests. Please wait a few minutes before generating again."
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+app.use('/api/v1/generate-quiz', aiLimiter);
+app.use('/api/v1/generate-custom-test', aiLimiter);
+app.use('/api/v1/create-class', aiLimiter);
+app.use('/api/v1/chat-tutor', aiLimiter);
 
 // ==========================================
 // --- INITIALIZE RAZORPAY & AI CLIENT ---
@@ -317,64 +351,68 @@ app.get('/api/ping', (req, res) => {
 
 app.post('/api/v1/support-ticket', async (req, res) => {
     try {
-        const { issueType, description, timestamp } = req.body;
-        let activeUserId = 'guest_user';
-        let activeUserEmail = 'guest@notestoquiz.in';
-        let activeUserName = 'Guest';
-
-        // 🚨 HACK-PROOF SECURITY: Token Verification
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const idToken = authHeader.split('Bearer ')[1];
-            try {
-                const decodedToken = await admin.auth().verifyIdToken(idToken);
-                activeUserId = decodedToken.uid;
-                activeUserEmail = decodedToken.email || 'No Email';
-                activeUserName = decodedToken.name || 'Student';
-            } catch (verifyErr) {
-                console.error("🚨 Token verification failed (Guest mode fallback):", verifyErr.message);
-            }
+        // 🛡️ STRICT LOGIN REQUIRED (Stops guest Gmail spam bomb)
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in with Google to raise a support ticket." });
         }
 
-        const safeIssue = xss(String(issueType || 'General'));
-        const safeDesc = xss(String(description || ''));
+        const safeIssue = xss(String(req.body.issueType || 'General').trim().slice(0, 80));
+        const safeDesc = xss(String(req.body.description || '').trim());
 
-        // 🔥 THE MASTERSTROKE: SEQUENTIAL TICKET ID 🔥
+        if (safeDesc.length < 10 || safeDesc.length > 1000) {
+            return res.status(400).json({ success: false, error: "Please describe your issue in 10 to 1000 characters." });
+        }
+
+        // 🛡️ ATOMIC DAILY LIMIT: Max 3 tickets per day per user
+        const todayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const userRef = db.collection('users').doc(req.user.uid);
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            const uData = userDoc.exists ? userDoc.data() : {};
+            const sentToday = (uData.ticketQuotaDate === todayIST) ? (Number(uData.ticketQuotaCount) || 0) : 0;
+            if (sentToday >= 3) throw new Error("TICKET_DAILY_LIMIT");
+            transaction.set(userRef, {
+                ticketQuotaDate: todayIST,
+                ticketQuotaCount: sentToday + 1
+            }, { merge: true });
+        });
+
         const customTicketId = `TKT-${Date.now()}`;
+        const activeUserEmail = req.user.email || 'No Email';
+        const activeUserName = req.user.name || 'Student';
 
-        // Save the ticket using .doc().set() so it stays perfectly sequential in DB
         await db.collection('SupportTickets').doc(customTicketId).set({
-            ticketId: customTicketId, 
-            uid: activeUserId,
+            ticketId: customTicketId,
+            uid: req.user.uid,
             email: activeUserEmail,
             name: activeUserName,
             issueType: safeIssue,
             description: safeDesc,
-            status: 'Open', 
-            userReportedTime: timestamp || Date.now(),
+            status: 'Open',
+            userReportedTime: req.body.timestamp || Date.now(),
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Shoot Email Notification
         try {
-            const mailOptions = {
+            await transporter.sendMail({
                 from: process.env.EMAIL_USER,
                 to: process.env.EMAIL_USER,
                 subject: `🚨 New Support Ticket [${customTicketId}]: ${safeIssue}`,
-                text: `New Ticket Details:\n\nTicket ID: ${customTicketId}\nName: ${activeUserName}\nEmail: ${activeUserEmail}\nIssue Type: ${safeIssue}\n\nDescription:\n${safeDesc}`
-            };
-            await transporter.sendMail(mailOptions);
+                text: `Ticket ID: ${customTicketId}\nName: ${activeUserName}\nEmail: ${activeUserEmail}\nIssue: ${safeIssue}\n\nDescription:\n${safeDesc}`
+            });
             return res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
         } catch (emailError) {
             console.error("🚨 Email sending failed, but ticket saved to DB:", emailError.message);
             return res.status(200).json({ success: true, message: 'Ticket received securely (Email notification delayed).' });
         }
     } catch (error) {
+        if (error.message === "TICKET_DAILY_LIMIT") {
+            return res.status(429).json({ success: false, error: "You have reached the daily limit of 3 support tickets. Please wait for our reply." });
+        }
         console.error("Support Ticket Error:", error);
         res.status(500).json({ success: false, error: "Could not save the ticket." });
     }
 });
-
 // 🔥 FETCH PREVIOUS SUPPORT TICKETS (PERMANENT FIX) 🔥
 app.get('/api/v1/my-tickets', async (req, res) => {
     try {
@@ -522,7 +560,7 @@ app.post('/api/v1/generate-quiz', upload.array('files', 5), async (req, res) => 
 
         // 🔥 GUEST LOGIC (IP ADDRESS FINGERPRINTING)
         if (userId === 'guest_user') {
-            const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
             const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); 
             const ipRef = db.collection('GuestLimits').doc(ipHash);
             
@@ -693,7 +731,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
         let finalRemainingCredits = "Skipped (Guest)";
 
         if (userId === 'guest_user') {
-            const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
             const ipHash = crypto.createHash('sha256').update(clientIp).digest('hex'); 
             const ipRef = db.collection('GuestLimits').doc(ipHash);
             
@@ -805,7 +843,7 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 // =======================================================================
 // 🔥 2. TEACHER CREATES A GROUP TEST 
 // =======================================================================
-app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => {
+app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
     let requiredCredits = 0;
     let creditsDeducted = false;
     const userId = req.user ? req.user.uid : 'guest_user';
@@ -944,67 +982,66 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
             read: false
         });
 
-        // 🔥 THE MAGIC: IN-APP + PUSH NOTIFICATIONS FOR ALL CONNECTED STUDENTS 🔥
+        // 🔥 THE MAGIC: CRASH-PROOF IN-APP + PUSH NOTIFICATIONS (500+ STUDENTS SAFE) 🔥
         try {
             const myStudentsSnap = await db.collection('users').doc(req.user.uid).collection('my_students').get();
             if (!myStudentsSnap.empty) {
-                const batch = db.batch();
-                const fcmTokens = []; // डिवाइस पर पुश करने के लिए टोकन्स की लिस्ट
+                let batch = db.batch();
+                const fcmTokens = [];
                 let notiCount = 0;
-                
-                // 1. स्टूडेंट्स के UIDs निकालो
+
                 const studentUids = myStudentsSnap.docs.map(doc => doc.id);
-                
-                // 2. समानांतर (Parallel) तरीके से सारे स्टूडेंट्स के मेन प्रोफाइल से FCM टोकन फेच करो (Super Fast)
                 const userDocs = await Promise.all(studentUids.map(uid => db.collection('users').doc(uid).get()));
 
-                userDocs.forEach(userDoc => {
-                    if (userDoc.exists) {
-                        const studentUid = userDoc.id;
-                        
-                        // A: In-App Notification के लिए DB में सेव करो
-                        const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
-                        batch.set(studentNotiRef, {
-                            title: "📝 New Test Assigned!",
-                            message: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
-                            testCode: generatedCode, 
-                            timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                            read: false
-                        });
-                        notiCount++;
+                for (const userDoc of userDocs) {
+                    if (!userDoc.exists) continue;
+                    const studentUid = userDoc.id;
 
-                        // B: Push Notification के लिए FCM Token जमा करो
-                        if (userDoc.data().fcmToken) {
-                            fcmTokens.push(userDoc.data().fcmToken);
-                        }
+                    const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
+                    batch.set(studentNotiRef, {
+                        title: "📝 New Test Assigned!",
+                        message: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
+                        testCode: generatedCode,
+                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                        read: false
+                    });
+                    notiCount++;
 
-                        // Firestore Limit Check
-                        if (notiCount === 490) {
-                            batch.commit();
-                            notiCount = 0;
-                        }
+                    if (userDoc.data().fcmToken) {
+                        fcmTokens.push(userDoc.data().fcmToken);
                     }
-                });
-                
+
+                    if (notiCount === 450) {
+                        await batch.commit();
+                        batch = db.batch();
+                        notiCount = 0;
+                    }
+                }
+
                 if (notiCount > 0) await batch.commit();
 
-                // 🚀 3. THE REAL PUSH NOTIFICATION 🚀
+                // 🚀 Chunked Push (500 tokens per FCM call, uses sendEachForMulticast)
                 if (fcmTokens.length > 0) {
-                    const payload = {
-                        notification: {
-                            title: "📝 New Test Assigned!",
-                            body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`
-                        },
-                        data: {
-                            testCode: generatedCode, // फ्रंटएंड को पता चलेगा कि किस टेस्ट पर जाना है
-                            click_action: "https://notestoquiz.in"
-                        },
-                        tokens: fcmTokens
-                    };
-                    
-                    // 500 टोकन्स तक एक साथ दागा जा सकता है
-                    const pushResponse = await admin.messaging().sendMulticast(payload);
-                    console.log(`✅ Push sent! Success: ${pushResponse.successCount}, Failed: ${pushResponse.failureCount}`);
+                    const messaging = admin.messaging();
+                    const sendFn = typeof messaging.sendEachForMulticast === 'function'
+                        ? messaging.sendEachForMulticast.bind(messaging)
+                        : messaging.sendMulticast.bind(messaging);
+
+                    for (let i = 0; i < fcmTokens.length; i += 500) {
+                        const tokenChunk = fcmTokens.slice(i, i + 500);
+                        const pushResponse = await sendFn({
+                            notification: {
+                                title: "📝 New Test Assigned!",
+                                body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`
+                            },
+                            data: {
+                                testCode: generatedCode,
+                                click_action: "https://notestoquiz.in"
+                            },
+                            tokens: tokenChunk
+                        });
+                        console.log(`✅ Push chunk sent! Success: ${pushResponse.successCount}, Failed: ${pushResponse.failureCount}`);
+                    }
                 }
             }
         } catch (pushErr) {
