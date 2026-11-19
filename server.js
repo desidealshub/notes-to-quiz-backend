@@ -1074,54 +1074,70 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
     }
 });
 // =======================================================================
-// 🔥 3. STUDENT JOINS A CLASS (Verify Code) 🔥
+// 🔥 3.A STUDENT JOINS A CLASS (METADATA ONLY — ZERO QUESTION/ANSWER LEAK) 🔥
 // =======================================================================
 app.post('/api/v1/verify-class', async (req, res) => {
     try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to access class tests." });
+        }
+
         const { code } = req.body;
         if (!code) return res.status(400).json({ success: false, error: "Access code is required." });
 
-        const safeCode = xss(code.trim().toUpperCase());
+        const safeCode = xss(String(code).trim().toUpperCase());
         const docRef = await db.collection('LiveExams').doc(safeCode).get();
 
         if (!docRef.exists) return res.status(404).json({ success: false, error: "Invalid Code. Check with your teacher." });
 
         const group = docRef.data();
 
-        if (Date.now() > group.expiresAt) {
+        if (group.status === 'inactive') {
+            return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
+        }
+
+        const isPaidTest = Boolean(group.requiresPayment || (Number(group.fee) > 0));
+        if (!isPaidTest && group.expiresAt && Date.now() > group.expiresAt) {
             return res.status(403).json({ success: false, error: `CODE EXPIRED! This test was valid until ${new Date(group.expiresAt).toLocaleString()}` });
         }
 
-        // 🛑 2. THE BOUNCER: CHECK MAX CAPACITY 🛑
-        const countSnapshot = await db.collection('history').where('groupCode', '==', safeCode).count().get();
-        const currentStudentCount = countSnapshot.data().count;
+        const [teacherDoc, studentDoc, countSnapshot] = await Promise.all([
+            group.instructorUid ? db.collection('users').doc(group.instructorUid).get() : Promise.resolve(null),
+            db.collection('users').doc(req.user.uid).get(),
+            db.collection('history').where('groupCode', '==', safeCode).count().get()
+        ]);
 
-        const MAX_SEATS = group.maxStudents || 50; 
-                
-        if (currentStudentCount >= MAX_SEATS) {
-            return res.status(403).json({ 
-                success: false, 
-                error: `🚨 CLASS FULL! Maximum ${MAX_SEATS} students allowed.` 
-            });
+        const banned = (teacherDoc && teacherDoc.exists) ? (teacherDoc.data().bannedStudents || []) : [];
+        if (banned.includes(req.user.uid)) {
+            return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
         }
 
-        res.status(200).json({ 
-            success: true, 
+        const MAX_SEATS = group.maxStudents || 50;
+        if (countSnapshot.data().count >= MAX_SEATS) {
+            return res.status(403).json({ success: false, error: `🚨 CLASS FULL! Maximum ${MAX_SEATS} students allowed.` });
+        }
+
+        const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
+        const isUnlocked = !isPaidTest || unlockedTests.includes(safeCode);
+
+        // 🛡️ ZERO LEAK: Paper, Answer Key aur Roll List yahan se kabhi nahi jayegi
+        res.status(200).json({
+            success: true,
             group: {
                 code: group.code,
                 name: group.name,
-                createdBy: group.instructorUid, // Needed for Commission Split
-                requiresPayment: group.requiresPayment || false, // 🔥 Frontend ko batayega ki ₹10 mangne hain ya nahi
-                instructorEmail: group.instructorEmail,
+                instructorUid: group.instructorUid,
+                createdBy: group.instructorUid,
+                requiresPayment: isPaidTest,
+                fee: isPaidTest ? (Number(group.fee) || 10) : 0,
+                isUnlocked: isUnlocked,
                 duration: group.duration,
-                requireBatch: group.requireBatch,
-                requireRoll: group.requireRoll,
-                requirePhone: group.requirePhone,
-                allowedRolls: group.allowedRolls || [], 
-                quizData: group.quizData 
+                questionCount: Array.isArray(group.quizData) ? group.quizData.length : 0,
+                requireBatch: Boolean(group.requireBatch),
+                requireRoll: Boolean(group.requireRoll),
+                requirePhone: Boolean(group.requirePhone)
             }
         });
-
     } catch (error) {
         console.error("🚨 Class Verification Error:", error);
         res.status(500).json({ success: false, error: "Network error checking code." });
@@ -1129,91 +1145,457 @@ app.post('/api/v1/verify-class', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 4. SAVE EXAM HISTORY & SEGREGATION (100% ANALYTICS COMPATIBLE) 🔥
+// 🛡️ 3.B START EXAM GATEKEEPER (STRIPS ALL correctAnswer & explanation!) 🛡️
 // =======================================================================
+app.post('/api/v1/start-exam', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to start the test." });
+        }
+
+        const safeCode = xss(String(req.body.testCode || '').trim().toUpperCase());
+        const rollNo = xss(String(req.body.rollNo || '').trim());
+        if (!safeCode) return res.status(400).json({ success: false, error: "Test code missing." });
+
+        const examDoc = await db.collection('LiveExams').doc(safeCode).get();
+        if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
+
+        const group = examDoc.data();
+        if (group.status === 'inactive') {
+            return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
+        }
+
+        const isPaidTest = Boolean(group.requiresPayment || (Number(group.fee) > 0));
+        if (!isPaidTest && group.expiresAt && Date.now() > group.expiresAt) {
+            return res.status(403).json({ success: false, error: "This test has expired." });
+        }
+
+        const [teacherDoc, studentDoc] = await Promise.all([
+            group.instructorUid ? db.collection('users').doc(group.instructorUid).get() : Promise.resolve(null),
+            db.collection('users').doc(req.user.uid).get()
+        ]);
+
+        const banned = (teacherDoc && teacherDoc.exists) ? (teacherDoc.data().bannedStudents || []) : [];
+        if (banned.includes(req.user.uid)) {
+            return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
+        }
+
+        if (isPaidTest) {
+            const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
+            if (!unlockedTests.includes(safeCode)) {
+                return res.status(403).json({ success: false, code: "PAYMENT_REQUIRED", error: "Payment required to unlock this test." });
+            }
+        }
+
+        if (!isPaidTest && group.requireRoll && Array.isArray(group.allowedRolls) && group.allowedRolls.length > 0) {
+            if (!group.allowedRolls.map(r => String(r).trim()).includes(rollNo)) {
+                return res.status(403).json({ success: false, code: "ROLL_NOT_ALLOWED", error: "Your Roll Number is not enrolled in this batch." });
+            }
+        }
+
+        // 🔥 STRIP ALL ANSWERS & EXPLANATIONS BEFORE SENDING TO STUDENT 🔥
+        const rawQuestions = Array.isArray(group.quizData) ? group.quizData : [];
+        const sanitizedQuizData = rawQuestions.map((q) => ({
+            type: q.type || 'single',
+            question: q.question,
+            options: q.options || {},
+            pyqTag: q.pyqTag || ''
+        }));
+
+        await db.collection('examStarts').doc(`${req.user.uid}_${safeCode}`).set({
+            uid: req.user.uid,
+            testCode: safeCode,
+            startedAt: Date.now()
+        }, { merge: true });
+
+        res.status(200).json({
+            success: true,
+            duration: Number(group.duration) || 30,
+            quizData: sanitizedQuizData
+        });
+    } catch (error) {
+        console.error("🚨 Start Exam Error:", error);
+        res.status(500).json({ success: false, error: "Could not start test. Please retry." });
+    }
+});
+
+// =======================================================================
+// 🛡️ 3.C SECURE WORKSPACE JOIN & LOADER (NO DIRECT users/LiveExams READ!) 🛡️
+// =======================================================================
+app.post('/api/v1/join-workspace', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in first." });
+        }
+
+        const rawCode = xss(String(req.body.code || '').trim().toUpperCase());
+        const suffix = rawCode.replace(/^SK-?/i, '');
+        if (suffix.length < 5) {
+            return res.status(400).json({ success: false, error: "Invalid class code." });
+        }
+
+        const candidates = Array.from(new Set([rawCode, `SK${suffix}`, `SK-${suffix}`]));
+        let teacherDoc = null;
+        for (const c of candidates) {
+            const snap = await db.collection('users').where('workspaceCode', '==', c).limit(1).get();
+            if (!snap.empty) { teacherDoc = snap.docs[0]; break; }
+        }
+
+        if (!teacherDoc) {
+            return res.status(404).json({ success: false, error: "No class found with this code." });
+        }
+
+        const tData = teacherDoc.data();
+        const banned = Array.isArray(tData.bannedStudents) ? tData.bannedStudents : [];
+        if (banned.includes(req.user.uid)) {
+            return res.status(403).json({ success: false, error: "You have been banned from this coaching class." });
+        }
+
+        const coachingName = tData.coachingName || tData.name || "Premium Educator";
+
+        await db.collection('users').doc(req.user.uid).set({
+            joinedWorkspaces: admin.firestore.FieldValue.arrayUnion(teacherDoc.id)
+        }, { merge: true });
+
+        res.status(200).json({
+            success: true,
+            teacher: {
+                id: teacherDoc.id,
+                name: coachingName,
+                workspaceCode: tData.workspaceCode
+            }
+        });
+    } catch (error) {
+        console.error("🚨 Join Workspace Error:", error);
+        res.status(500).json({ success: false, error: "Server error joining class." });
+    }
+});
+
+app.get('/api/v1/student-workspaces-list', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(200).json({ success: true, workspaces: [] });
+        }
+
+        const userDoc = await db.collection('users').doc(req.user.uid).get();
+        if (!userDoc.exists) return res.status(200).json({ success: true, workspaces: [] });
+
+        const uData = userDoc.data();
+        const teacherIds = new Set(Array.isArray(uData.joinedWorkspaces) ? uData.joinedWorkspaces : []);
+
+        const unlocked = Array.isArray(uData.unlockedTests) ? uData.unlockedTests : [];
+        if (unlocked.length > 0) {
+            const examDocs = await Promise.all(unlocked.slice(0, 30).map(code => db.collection('LiveExams').doc(code).get()));
+            examDocs.forEach(d => {
+                if (d.exists && d.data().instructorUid && d.data().instructorUid !== req.user.uid) {
+                    teacherIds.add(d.data().instructorUid);
+                }
+            });
+        }
+
+        const workspaces = [];
+        const tDocs = await Promise.all(Array.from(teacherIds).map(tid => db.collection('users').doc(tid).get()));
+        tDocs.forEach(tDoc => {
+            if (!tDoc.exists) return;
+            const td = tDoc.data();
+            if (Array.isArray(td.bannedStudents) && td.bannedStudents.includes(req.user.uid)) return;
+            workspaces.push({
+                id: tDoc.id,
+                name: td.coachingName || td.name || "Premium Class"
+            });
+        });
+
+        res.status(200).json({ success: true, workspaces });
+    } catch (error) {
+        console.error("🚨 Workspaces List Error:", error);
+        res.status(500).json({ success: false, error: "Failed to load workspaces." });
+    }
+});
+
+app.get('/api/v1/student-workspace/:teacherUid', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in." });
+        }
+
+        const teacherUid = xss(String(req.params.teacherUid || '').trim());
+        const [teacherDoc, studentDoc, examsSnap] = await Promise.all([
+            db.collection('users').doc(teacherUid).get(),
+            db.collection('users').doc(req.user.uid).get(),
+            db.collection('LiveExams').where('instructorUid', '==', teacherUid).get()
+        ]);
+
+        if (!teacherDoc.exists) {
+            return res.status(404).json({ success: false, error: "Coaching workspace not found." });
+        }
+
+        const tData = teacherDoc.data();
+        if (Array.isArray(tData.bannedStudents) && tData.bannedStudents.includes(req.user.uid)) {
+            return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
+        }
+
+        const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
+        const tests = [];
+
+        examsSnap.forEach(doc => {
+            const t = doc.data();
+            const isPaid = Boolean(t.requiresPayment || (Number(t.fee) > 0));
+            const createdMs = (t.createdAt && typeof t.createdAt.toMillis === 'function')
+                ? t.createdAt.toMillis()
+                : (Number(t.createdAt) || 0);
+
+            // 🛡️ ZERO PAPER LEAK: Sirf metadata bhejo, quizData nahi!
+            tests.push({
+                code: t.code || doc.id,
+                name: t.name || "Class Test",
+                instructorUid: t.instructorUid,
+                duration: Number(t.duration) || 30,
+                questionCount: Array.isArray(t.quizData) ? t.quizData.length : 0,
+                requiresPayment: isPaid,
+                fee: isPaid ? (Number(t.fee) || 10) : 0,
+                isUnlocked: !isPaid || unlockedTests.includes(t.code || doc.id),
+                requireBatch: Boolean(t.requireBatch),
+                requireRoll: Boolean(t.requireRoll),
+                requirePhone: Boolean(t.requirePhone),
+                status: t.status || 'active',
+                expiresAt: t.expiresAt || null,
+                createdAtMs: createdMs
+            });
+        });
+
+        tests.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+
+        res.status(200).json({
+            success: true,
+            teacherName: tData.coachingName || tData.name || "Premium Class",
+            tests
+        });
+    } catch (error) {
+        console.error("🚨 Student Workspace Load Error:", error);
+        res.status(500).json({ success: false, error: "Failed to load class tests." });
+    }
+});
+
+// =======================================================================
+// 🛡️ 3.D TEACHER VIEW STUDENT PROGRESS (NO DIRECT OTHER-USER READ!) 🛡️
+// =======================================================================
+app.get('/api/v1/teacher/student-progress/:studentUid', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Unauthorized." });
+        }
+
+        const studentUid = xss(String(req.params.studentUid || '').trim());
+        const teacherUid = req.user.uid;
+
+        const [crmDoc, stuDoc, testsSnap] = await Promise.all([
+            db.collection('users').doc(teacherUid).collection('my_students').doc(studentUid).get(),
+            db.collection('users').doc(studentUid).get(),
+            db.collection('LiveExams').where('instructorUid', '==', teacherUid).get()
+        ]);
+
+        if (!crmDoc.exists) {
+            return res.status(403).json({ success: false, error: "Student is not enrolled in your class." });
+        }
+
+        const unlocked = stuDoc.exists ? (stuDoc.data().unlockedTests || []) : [];
+        const historySnap = await db.collection('history')
+            .where('userId', '==', studentUid)
+            .where('testType', '==', 'group_test')
+            .select('groupCode', 'score', 'total')
+            .get();
+
+        const attemptsByCode = {};
+        historySnap.forEach(doc => {
+            const d = doc.data();
+            if (d.groupCode && !attemptsByCode[d.groupCode]) {
+                attemptsByCode[d.groupCode] = { score: Number(d.score) || 0, total: Number(d.total) || 0 };
+            }
+        });
+
+        const results = [];
+        testsSnap.forEach(doc => {
+            const t = doc.data();
+            const code = t.code || doc.id;
+            const totalQs = Array.isArray(t.quizData) ? t.quizData.length : 0;
+            const attempt = attemptsByCode[code] || null;
+            const isPaid = Boolean(t.requiresPayment || (Number(t.fee) > 0));
+
+            let status = 'pending';
+            if (attempt) status = 'attempted';
+            else if (isPaid && unlocked.includes(code)) status = 'paid_pending';
+            else if (isPaid && !unlocked.includes(code)) status = 'locked';
+
+            results.push({
+                code,
+                name: t.name || "Class Test",
+                status,
+                score: attempt ? attempt.score : null,
+                total: totalQs
+            });
+        });
+
+        res.status(200).json({ success: true, results });
+    } catch (error) {
+        console.error("🚨 Teacher Student Progress Error:", error);
+        res.status(500).json({ success: false, error: "Failed to load student progress." });
+    }
+});
+
+// =======================================================================
+// 🔥 4. SAVE EXAM HISTORY (100% SERVER-SIDE GRADING — ZERO FAKE SCORES) 🔥
+// =======================================================================
+function gradeQuizServerSide(officialQuizData, userAnswersObj) {
+    const safeAnswers = (userAnswersObj && typeof userAnswersObj === 'object') ? userAnswersObj : {};
+    let correct = 0, wrong = 0, skipped = 0;
+
+    officialQuizData.forEach((q, index) => {
+        const ans = safeAnswers[index] !== undefined ? safeAnswers[index] : safeAnswers[String(index)];
+        const qType = q.type || 'single';
+
+        if (ans === undefined || ans === null || String(ans).trim() === '') {
+            skipped++;
+            return;
+        }
+
+        let isCorrect = false;
+        if (qType === 'multiple') {
+            const userSorted = String(ans).split(',').map(s => s.trim().toUpperCase()).filter(Boolean).sort().join(',');
+            const correctSorted = String(q.correctAnswer || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean).sort().join(',');
+            isCorrect = userSorted === correctSorted;
+        } else {
+            isCorrect = String(ans).trim().toUpperCase() === String(q.correctAnswer || '').trim().toUpperCase();
+        }
+
+        if (isCorrect) correct++;
+        else wrong++;
+    });
+
+    return { correct, wrong, skipped, total: officialQuizData.length };
+}
+
 app.post('/api/v1/save-history', async (req, res) => {
     try {
-        const { subject, score, total, time, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails, isReattempt } = req.body;
+        const { subject, time, quizData, userAnswers, flaggedQuestions, testType, groupCode, candidateDetails, isReattempt } = req.body;
         const activeUserId = req.user ? req.user.uid : 'guest_user';
-        
-        let finalTestType = xss(testType || 'individual');
-        let finalGroupCode = xss(groupCode || 'none');
 
-        // 🔥 THE ULTIMATE BACKEND GATEKEEPER 🔥
-        if (finalTestType === 'group_test' && finalGroupCode !== 'none') {
+        let finalTestType = xss(String(testType || 'individual'));
+        let finalGroupCode = xss(String(groupCode || 'none').trim().toUpperCase());
+        let finalQuizData = Array.isArray(quizData) ? quizData.slice(0, 200) : [];
+        let finalSubject = xss(String(subject || 'General'));
+        let finalTime = xss(String(time || '00:00'));
+
+        if (finalTestType === 'group_test' && finalGroupCode !== 'NONE' && finalGroupCode !== 'none') {
+            if (activeUserId === 'guest_user') {
+                return res.status(401).json({ success: false, error: "You must be logged in to submit a class test." });
+            }
+
             const groupDoc = await db.collection('LiveExams').doc(finalGroupCode).get();
-            if (groupDoc.exists) {
-                const gData = groupDoc.data();
+            if (!groupDoc.exists) {
+                return res.status(404).json({ success: false, error: "Class test not found." });
+            }
 
-                // 🚨 RULE A: PREMIUM TEST VERIFICATION (VIA EMAIL/UID) 🚨
-                if (gData.requiresPayment) {
-                    if (activeUserId === 'guest_user') {
-                        return res.status(403).json({ success: false, error: "Access Denied. You must log in and pay ₹10 to submit this premium test." });
-                    }
-                    const studentDoc = await db.collection('users').doc(activeUserId).get();
-                    const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
-                    
-                    // Backend directly checks if this specific user has paid for this specific test
-                    if (!unlockedTests.includes(finalGroupCode)) {
-                        return res.status(403).json({ success: false, error: "Payment Verification Failed. You have not paid for this test." });
-                    }
-                } 
-                // 🚨 RULE B: FREE TEST ROSTER VERIFICATION 🚨
-                else if (gData.requireRoll && gData.allowedRolls && gData.allowedRolls.length > 0) {
-                    const studentRoll = candidateDetails && candidateDetails.rollNo ? candidateDetails.rollNo.toString().trim() : "";
-                    if (!gData.allowedRolls.includes(studentRoll)) {
-                        return res.status(403).json({ success: false, error: `Access Denied. Roll Number ${studentRoll} is not enrolled in this batch.` });
-                    }
+            const gData = groupDoc.data();
+            finalSubject = xss(gData.name || finalSubject);
+
+            if (gData.instructorUid) {
+                const teacherDoc = await db.collection('users').doc(gData.instructorUid).get();
+                const banned = (teacherDoc.exists && Array.isArray(teacherDoc.data().bannedStudents)) ? teacherDoc.data().bannedStudents : [];
+                if (banned.includes(activeUserId)) {
+                    return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
                 }
             }
 
-            // 🔥 FIRST ATTEMPT ONLY PROTECTION FOR GROUP TESTS 🔥
-            let alreadyAttempted = Boolean(isReattempt);
+            const isPaidTest = Boolean(gData.requiresPayment || (Number(gData.fee) > 0));
+            if (isPaidTest) {
+                const studentDoc = await db.collection('users').doc(activeUserId).get();
+                const unlockedTests = studentDoc.exists ? (studentDoc.data().unlockedTests || []) : [];
+                if (!unlockedTests.includes(finalGroupCode)) {
+                    return res.status(403).json({ success: false, error: "Payment Verification Failed. You have not unlocked this test." });
+                }
+            } else if (gData.requireRoll && Array.isArray(gData.allowedRolls) && gData.allowedRolls.length > 0) {
+                const studentRoll = candidateDetails && candidateDetails.rollNo ? String(candidateDetails.rollNo).trim() : "";
+                if (!gData.allowedRolls.map(r => String(r).trim()).includes(studentRoll)) {
+                    return res.status(403).json({ success: false, error: `Access Denied. Roll Number ${studentRoll} is not enrolled.` });
+                }
+            }
 
-            if (!alreadyAttempted && activeUserId !== 'guest_user') {
+            // 🔥 OVERRIDE WITH OFFICIAL SERVER QUIZ DATA (NEVER TRUST CLIENT SCORE!)
+            finalQuizData = Array.isArray(gData.quizData) ? gData.quizData : [];
+
+            try {
+                const startDoc = await db.collection('examStarts').doc(`${activeUserId}_${finalGroupCode}`).get();
+                if (startDoc.exists && startDoc.data().startedAt) {
+                    const maxSecs = (Number(gData.duration) || 30) * 60;
+                    const elapsedSecs = Math.min(maxSecs, Math.max(1, Math.floor((Date.now() - startDoc.data().startedAt) / 1000)));
+                    const mm = String(Math.floor(elapsedSecs / 60)).padStart(2, '0');
+                    const ss = String(elapsedSecs % 60).padStart(2, '0');
+                    finalTime = `${mm}:${ss}`;
+                }
+            } catch (e) {}
+
+            let alreadyAttempted = Boolean(isReattempt);
+            if (!alreadyAttempted) {
                 const existingSnap = await db.collection('history')
                     .where('groupCode', '==', finalGroupCode)
                     .where('userId', '==', activeUserId)
                     .limit(1)
                     .get();
-
-                if (!existingSnap.empty) {
-                    alreadyAttempted = true;
-                }
+                if (!existingSnap.empty) alreadyAttempted = true;
             }
 
             if (alreadyAttempted) {
                 finalTestType = 'individual';
                 finalGroupCode = `reattempt_${finalGroupCode}`;
-                console.log(`🚫 Re-attempt filtered from Teacher Analytics for user: ${activeUserId}`);
             }
+        } else {
+            finalGroupCode = 'none';
         }
+
+        const graded = gradeQuizServerSide(finalQuizData, userAnswers);
+
+        const safeCandidate = candidateDetails ? {
+            name: xss(String(candidateDetails.name || req.user.name || 'Student').slice(0, 80)),
+            email: xss(String(req.user.email || candidateDetails.email || '').slice(0, 120)),
+            phone: xss(String(candidateDetails.phone || 'N/A').slice(0, 20)),
+            batchTime: xss(String(candidateDetails.batchTime || 'N/A').slice(0, 40)),
+            rollNo: xss(String(candidateDetails.rollNo || 'N/A').slice(0, 30))
+        } : null;
 
         const docRef = await db.collection('history').add({
             userId: xss(activeUserId),
-            subject: xss(subject || 'General'),
-            score: Number(score) || 0,
-            total: Number(total) || 0,
-            time: xss(time || '00:00'),
-            testType: finalTestType, 
-            groupCode: finalGroupCode,     
-            candidateDetails: candidateDetails || null, 
-            quizData,
-            userAnswers: userAnswers || {},
-            flaggedQuestions: flaggedQuestions || [],
-            // 🔥 THE ANTI-CHEAT TRACKER 🔥
+            subject: finalSubject,
+            score: graded.correct,
+            wrong: graded.wrong,
+            skipped: graded.skipped,
+            total: graded.total,
+            time: finalTime,
+            testType: finalTestType,
+            groupCode: finalGroupCode,
+            candidateDetails: safeCandidate,
+            quizData: finalQuizData,
+            userAnswers: (userAnswers && typeof userAnswers === 'object') ? userAnswers : {},
+            flaggedQuestions: Array.isArray(flaggedQuestions) ? flaggedQuestions : [],
             forcedByAntiCheat: Boolean(req.body.forcedByAntiCheat || false),
             cheatQuestionNumber: req.body.cheatQuestionNumber || null,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        res.status(200).json({ success: true, recordId: docRef.id });
+        res.status(200).json({
+            success: true,
+            recordId: docRef.id,
+            score: graded.correct,
+            wrong: graded.wrong,
+            skipped: graded.skipped,
+            total: graded.total,
+            time: finalTime,
+            quizData: finalQuizData
+        });
     } catch (error) {
         console.error("🚨 Firestore History Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // =======================================================================
 // 🔥 4.B FETCH USER'S CLOUD EXAM HISTORY (MULTI-DEVICE SYNC) 🔥
 // =======================================================================
