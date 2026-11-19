@@ -1042,8 +1042,14 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
                     });
                     notiCount++;
 
-                    if (userDoc.data().fcmToken) {
-                        fcmTokens.push(userDoc.data().fcmToken);
+                    const uData = userDoc.data() || {};
+                    if (uData.fcmToken && typeof uData.fcmToken === 'string') {
+                        fcmTokens.push(uData.fcmToken);
+                    }
+                    if (Array.isArray(uData.fcmTokens)) {
+                        uData.fcmTokens.forEach(tk => {
+                            if (tk && typeof tk === 'string') fcmTokens.push(tk);
+                        });
                     }
 
                     if (notiCount === 450) {
@@ -1055,27 +1061,48 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
 
                 if (notiCount > 0) await batch.commit();
 
-                // 🚀 Chunked Push (500 tokens per FCM call, uses sendEachForMulticast)
-                if (fcmTokens.length > 0) {
+                const uniqueTokens = Array.from(new Set(fcmTokens.filter(Boolean)));
+                console.log(`📣 Test "${safeName}" -> Found ${uniqueTokens.length} unique FCM tokens across ${userDocs.length} students.`);
+
+                // 🚀 High-Priority Android/Web Push + Exact Failure Logging
+                if (uniqueTokens.length > 0) {
                     const messaging = admin.messaging();
                     const sendFn = typeof messaging.sendEachForMulticast === 'function'
                         ? messaging.sendEachForMulticast.bind(messaging)
                         : messaging.sendMulticast.bind(messaging);
 
-                    for (let i = 0; i < fcmTokens.length; i += 500) {
-                        const tokenChunk = fcmTokens.slice(i, i + 500);
+                    for (let i = 0; i < uniqueTokens.length; i += 500) {
+                        const tokenChunk = uniqueTokens.slice(i, i + 500);
                         const pushResponse = await sendFn({
                             notification: {
                                 title: "📝 New Test Assigned!",
                                 body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`
                             },
                             data: {
+                                title: "📝 New Test Assigned!",
+                                body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
                                 testCode: generatedCode,
-                                click_action: "https://notestoquiz.in"
+                                url: "https://notestoquiz.in"
+                            },
+                            webpush: {
+                                headers: { Urgency: "high", TTL: "86400" },
+                                notification: {
+                                    title: "📝 New Test Assigned!",
+                                    body: `Your teacher has assigned a new test: "${safeName}". Tap here to start.`,
+                                    icon: "https://notestoquiz.in/icon-192.png",
+                                    badge: "https://notestoquiz.in/icon-192.png",
+                                    requireInteraction: true
+                                },
+                                fcmOptions: { link: "https://notestoquiz.in" }
                             },
                             tokens: tokenChunk
                         });
                         console.log(`✅ Push chunk sent! Success: ${pushResponse.successCount}, Failed: ${pushResponse.failureCount}`);
+                        if (pushResponse.failureCount > 0 && Array.isArray(pushResponse.responses)) {
+                            pushResponse.responses.forEach((r, idx) => {
+                                if (!r.success) console.warn(`❌ FCM Token[${idx}] failed:`, r.error?.code, r.error?.message);
+                            });
+                        }
                     }
                 }
             }
@@ -1288,9 +1315,17 @@ app.post('/api/v1/join-workspace', async (req, res) => {
 
         const coachingName = tData.coachingName || tData.name || "Premium Educator";
 
-        await db.collection('users').doc(req.user.uid).set({
-            joinedWorkspaces: admin.firestore.FieldValue.arrayUnion(teacherDoc.id)
-        }, { merge: true });
+        await Promise.all([
+            db.collection('users').doc(req.user.uid).set({
+                joinedWorkspaces: admin.firestore.FieldValue.arrayUnion(teacherDoc.id)
+            }, { merge: true }),
+            db.collection('users').doc(teacherDoc.id).collection('my_students').doc(req.user.uid).set({
+                uid: req.user.uid,
+                name: xss(String(req.user.name || 'Student').slice(0, 80)),
+                email: xss(String(req.user.email || '').slice(0, 120)),
+                lastActive: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true })
+        ]);
 
         res.status(200).json({
             success: true,
