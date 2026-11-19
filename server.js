@@ -885,7 +885,7 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
     
     // 🚨 THE MASTER FIX: userPlan को try ब्लॉक के बाहर सबसे ऊपर डिक्लेअर कर!
     let userPlan = 'Free'; 
-
+    let userRole = 'student';
     try {
         if (userId === 'guest_user') {
             return res.status(403).json({ success: false, error: "Only logged in teachers can create classes." });
@@ -914,6 +914,7 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
             if (userDoc.exists) {
                 if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
                 if (userDoc.data().plan !== undefined) userPlan = userDoc.data().plan;
+                if (userDoc.data().role !== undefined) userRole = String(userDoc.data().role).trim().toLowerCase();
             }
 
             // 🔥 GATEKEEPER: ENFORCE QUESTIONS PER TEST BASED ON PLAN
@@ -1017,21 +1018,27 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
             read: false
         });
 
-        // 🔥 THE MAGIC: CRASH-PROOF IN-APP + PUSH NOTIFICATIONS (500+ STUDENTS SAFE) 🔥
+        // 🔥 REAL TELEMETRY: IN-APP + DEVICE PUSH NOTIFICATIONS (EXACT STUDENT COUNTS) 🔥
+        let totalEnrolledStudents = 0;
+        let inAppNotifiedCount = 0;
+        let pushDeliveredDevices = 0;
+        let pushFailedDevices = 0;
+        const pushDeliveredStudentUids = new Set();
+
         try {
             const myStudentsSnap = await db.collection('users').doc(req.user.uid).collection('my_students').get();
+            totalEnrolledStudents = myStudentsSnap.size;
+
             if (!myStudentsSnap.empty) {
                 let batch = db.batch();
-                const fcmTokens = [];
-                let notiCount = 0;
-
+                let batchCount = 0;
+                const tokenOwnerMap = new Map();
                 const studentUids = myStudentsSnap.docs.map(doc => doc.id);
                 const userDocs = await Promise.all(studentUids.map(uid => db.collection('users').doc(uid).get()));
 
                 for (const userDoc of userDocs) {
                     if (!userDoc.exists) continue;
                     const studentUid = userDoc.id;
-
                     const studentNotiRef = db.collection('users').doc(studentUid).collection('notifications').doc();
                     batch.set(studentNotiRef, {
                         title: "📝 New Test Assigned!",
@@ -1040,31 +1047,30 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
                         timestamp: admin.firestore.FieldValue.serverTimestamp(),
                         read: false
                     });
-                    notiCount++;
+                    batchCount++;
+                    inAppNotifiedCount++;
 
                     const uData = userDoc.data() || {};
-                    if (uData.fcmToken && typeof uData.fcmToken === 'string') {
-                        fcmTokens.push(uData.fcmToken);
-                    }
-                    if (Array.isArray(uData.fcmTokens)) {
-                        uData.fcmTokens.forEach(tk => {
-                            if (tk && typeof tk === 'string') fcmTokens.push(tk);
-                        });
-                    }
+                    const addToken = (tk) => {
+                        if (tk && typeof tk === 'string' && !tokenOwnerMap.has(tk)) {
+                            tokenOwnerMap.set(tk, studentUid);
+                        }
+                    };
+                    addToken(uData.fcmToken);
+                    if (Array.isArray(uData.fcmTokens)) uData.fcmTokens.forEach(addToken);
 
-                    if (notiCount === 450) {
+                    if (batchCount === 450) {
                         await batch.commit();
                         batch = db.batch();
-                        notiCount = 0;
+                        batchCount = 0;
                     }
                 }
 
-                if (notiCount > 0) await batch.commit();
+                if (batchCount > 0) await batch.commit();
 
-                const uniqueTokens = Array.from(new Set(fcmTokens.filter(Boolean)));
-                console.log(`📣 Test "${safeName}" -> Found ${uniqueTokens.length} unique FCM tokens across ${userDocs.length} students.`);
+                const uniqueTokens = Array.from(tokenOwnerMap.keys());
+                console.log(`📣 Test "${safeName}" -> Found ${uniqueTokens.length} unique FCM tokens across ${inAppNotifiedCount} students.`);
 
-                // 🚀 High-Priority Android/Web Push + Exact Failure Logging
                 if (uniqueTokens.length > 0) {
                     const messaging = admin.messaging();
                     const sendFn = typeof messaging.sendEachForMulticast === 'function'
@@ -1097,10 +1103,19 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
                             },
                             tokens: tokenChunk
                         });
+
+                        pushDeliveredDevices += (pushResponse.successCount || 0);
+                        pushFailedDevices += (pushResponse.failureCount || 0);
                         console.log(`✅ Push chunk sent! Success: ${pushResponse.successCount}, Failed: ${pushResponse.failureCount}`);
-                        if (pushResponse.failureCount > 0 && Array.isArray(pushResponse.responses)) {
+
+                        if (Array.isArray(pushResponse.responses)) {
                             pushResponse.responses.forEach((r, idx) => {
-                                if (!r.success) console.warn(`❌ FCM Token[${idx}] failed:`, r.error?.code, r.error?.message);
+                                if (r.success) {
+                                    const ownerUid = tokenOwnerMap.get(tokenChunk[idx]);
+                                    if (ownerUid) pushDeliveredStudentUids.add(ownerUid);
+                                } else {
+                                    console.warn(`❌ FCM Token[${idx}] failed:`, r.error?.code, r.error?.message);
+                                }
                             });
                         }
                     }
@@ -1110,8 +1125,22 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
             console.error("🚨 Failed to push notifications to students:", pushErr);
         }
 
-        res.status(200).json({ success: true, code: generatedCode, expiresAt: finalExpiresAt });
+        const isPermanentTeacher = (userRole === 'teacher' || userRole === 'educator');
 
+        res.status(200).json({
+            success: true,
+            code: generatedCode,
+            testName: safeName,
+            expiresAt: finalExpiresAt,
+            isPermanentTeacher: isPermanentTeacher,
+            notificationStats: {
+                totalStudents: totalEnrolledStudents,
+                inAppNotified: inAppNotifiedCount,
+                pushDeliveredStudents: pushDeliveredStudentUids.size,
+                pushDeliveredDevices: pushDeliveredDevices,
+                pushFailed: pushFailedDevices
+            }
+        });
     } catch (error) {
         console.error("🚨 Class Creation Error:", error);
 
