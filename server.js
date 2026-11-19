@@ -781,7 +781,7 @@ app.post('/api/v1/create-class', upload.array('files', 10), async (req, res) => 
         await db.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             let currentCredits = 30; 
-            let userPlan = 'Free';
+            userPlan = 'Free';
             
             if (userDoc.exists) {
                 if (userDoc.data().credits !== undefined) currentCredits = Number(userDoc.data().credits);
@@ -1329,12 +1329,26 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
     }
 });
 // =======================================================================
+// 🏦 MASTER PLAN VAULT (SINGLE SOURCE OF TRUTH — HACK-PROOF)
+// ⚠️ Agar ₹499 par 1000 credits dene hain to yahan 2000 ko 1000 kar dena
+// =======================================================================
+const PLAN_CATALOG = Object.freeze({
+    49:  { name: 'Starter',   credits: 100,  maxQs: 30  },
+    99:  { name: 'Pro',       credits: 250,  maxQs: 50  },
+    199: { name: 'Elite',     credits: 600,  maxQs: 100 },
+    499: { name: 'Institute', credits: 1000, maxQs: 150 }
+});
+
+// =======================================================================
 // 🔥 7.A CHECK COUPON (FOR FRONTEND UI) 🔥
 // =======================================================================
 app.post('/api/v1/check-coupon', async (req, res) => {
     try {
         const { amount, couponCode } = req.body;
-        if (!amount || !couponCode) return res.status(400).json({ success: false, error: "Missing details." });
+        const planAmount = Number(amount);
+        if (!PLAN_CATALOG[planAmount] || !couponCode) {
+            return res.status(400).json({ success: false, error: "Invalid plan or missing coupon." });
+        }
 
         const safeCode = xss(couponCode.trim().toUpperCase());
         const couponDoc = await db.collection('coupons').doc(safeCode).get();
@@ -1344,18 +1358,19 @@ app.post('/api/v1/check-coupon', async (req, res) => {
         }
 
         const couponData = couponDoc.data();
-        if (!couponData.isActive || !couponData.validFor.includes(Number(amount))) {
-            return res.status(400).json({ success: false, error: `This code is not valid for the ₹${amount} plan.` });
+        if (!couponData.isActive || !Array.isArray(couponData.validFor) || !couponData.validFor.includes(planAmount)) {
+            return res.status(400).json({ success: false, error: `This code is not valid for the ₹${planAmount} plan.` });
         }
 
-        const discountAmount = (Number(amount) * Number(couponData.discountPercent)) / 100;
-        const finalAmount = Number(amount) - discountAmount;
+        const discountPercent = Math.min(Math.max(Number(couponData.discountPercent) || 0, 0), 90);
+        const discountAmount = (planAmount * discountPercent) / 100;
+        const finalAmount = Math.max(1, Math.round(planAmount - discountAmount));
 
-        res.status(200).json({ 
-            success: true, 
-            originalAmount: amount,
-            finalAmount: finalAmount, 
-            discountPercent: couponData.discountPercent 
+        res.status(200).json({
+            success: true,
+            originalAmount: planAmount,
+            finalAmount: finalAmount,
+            discountPercent: discountPercent
         });
     } catch (error) {
         console.error("Coupon Check Error:", error);
@@ -1364,47 +1379,60 @@ app.post('/api/v1/check-coupon', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 7.B RAZORPAY ORDER CREATION (SMART BUSINESS TRACKING WITH COUPON) 🔥
+// 🔥 7.B RAZORPAY ORDER CREATION (WHITELISTED PLANS ONLY) 🔥
 // =======================================================================
 app.post('/api/v1/create-order', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Please log in to purchase credits." });
-        
-        const { amount, couponCode } = req.body; // 👈 कूपन कोड फ्रंटएंड से आएगा
-        if (!amount || amount < 1) return res.status(400).json({ success: false, error: "Invalid amount." });
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Please log in to purchase credits." });
+        }
 
-        let finalPayableAmount = Number(amount);
+        const planAmount = Number(req.body.amount);
+        const couponCode = req.body.couponCode;
+
+        // 🛡️ STRICT WHITELIST: Koi bhi ₹1 ya fake amount ka order nahi bana sakta!
+        const selectedPlan = PLAN_CATALOG[planAmount];
+        if (!selectedPlan) {
+            return res.status(400).json({ success: false, error: "Invalid plan amount selected." });
+        }
+
+        let finalPayableAmount = planAmount;
         let appliedCoupon = null;
 
-        // 🚨 THE BRAIN: Backend Par Coupon Calculation (Hack-Proof)
         if (couponCode) {
-            const safeCode = xss(couponCode.trim().toUpperCase());
+            const safeCode = xss(String(couponCode).trim().toUpperCase());
             const couponDoc = await db.collection('coupons').doc(safeCode).get();
-            
-            if (couponDoc.exists && couponDoc.data().isActive && couponDoc.data().validFor.includes(Number(amount))) {
-                const discount = (Number(amount) * Number(couponDoc.data().discountPercent)) / 100;
-                finalPayableAmount = Number(amount) - discount;
+
+            if (couponDoc.exists && couponDoc.data().isActive && Array.isArray(couponDoc.data().validFor) && couponDoc.data().validFor.includes(planAmount)) {
+                const discountPercent = Math.min(Math.max(Number(couponDoc.data().discountPercent) || 0, 0), 90);
+                const discount = (planAmount * discountPercent) / 100;
+                finalPayableAmount = Math.max(1, Math.round(planAmount - discount));
                 appliedCoupon = safeCode;
             }
         }
 
-        // Razorpay को सिर्फ डिस्काउंटेड (कटा हुआ) अमाउंट ही भेजेंगे
         const options = {
-            amount: Math.round(finalPayableAmount * 100), // Razorpay needs paise
+            amount: Math.round(finalPayableAmount * 100), // paise
             currency: "INR",
             receipt: `QUIZ_${req.user.uid.substring(0, 5)}_${Date.now()}`,
             notes: {
                 business: "NotesToQuiz",
-                userEmail: req.user.email,
-                originalPlan: amount,
-                couponUsed: appliedCoupon || 'NONE' // 👈 Razorpay के डैशबोर्ड में भी दिखेगा
+                uid: req.user.uid,
+                userEmail: req.user.email || '',
+                originalPlan: String(planAmount),
+                planName: selectedPlan.name,
+                couponUsed: appliedCoupon || 'NONE'
             }
         };
-        
+
         const order = await razorpay.orders.create(options);
-        
-        // फ्रंटएंड को नया अमाउंट बता दो ताकि Razorpay का पॉपअप उतने का ही खुले
-        res.status(200).json({ success: true, order, finalAmount: finalPayableAmount, appliedCoupon });
+
+        res.status(200).json({
+            success: true,
+            order,
+            finalAmount: finalPayableAmount,
+            appliedCoupon
+        });
     } catch (error) {
         console.error("Razorpay Order Error:", error);
         res.status(500).json({ success: false, error: "Failed to connect to payment gateway." });
@@ -1412,15 +1440,21 @@ app.post('/api/v1/create-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 8. RAZORPAY PAYMENT VERIFICATION (HACK-PROOF CREDITS) 🔥
+// 🔥 8. RAZORPAY PAYMENT VERIFICATION (ANTI-TAMPER + ANTI-REPLAY) 🔥
 // =======================================================================
 app.post('/api/v1/verify-payment', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
-        
-        // 🔥 FIX: 'creditsToAdd' ko frontend se hataya! Hacker ab F12 se credits nahi badha sakta.
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, phone, originalPlanAmount, amountPaid, couponUsed } = req.body;
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized." });
+        }
 
+        // Frontend se sirf Razorpay IDs + phone lo — amount/credits par zero trust!
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, phone } = req.body;
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, error: "Missing payment verification parameters." });
+        }
+
+        // 1. Cryptographic Signature Verification
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
             .digest('hex');
@@ -1429,80 +1463,107 @@ app.post('/api/v1/verify-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Payment verification failed. Signature mismatch." });
         }
 
-        // 🚨 THE VAULT: Backend decides credits based on the actual plan amount selected 🚨
-        const planAmount = Number(originalPlanAmount);
-        let baseCreditsToAdd = 0;
-        let upgradedPlan = 'Free';
+        // 2. 🛡️ FETCH REAL ORDER & PAYMENT DIRECTLY FROM RAZORPAY SERVERS
+        const [rzpOrder, rzpPayment] = await Promise.all([
+            razorpay.orders.fetch(razorpay_order_id),
+            razorpay.payments.fetch(razorpay_payment_id)
+        ]);
 
-        if (planAmount === 49) {
-            baseCreditsToAdd = 100;
-            upgradedPlan = 'Starter';
-        } else if (planAmount === 99) {
-            baseCreditsToAdd = 250;
-            upgradedPlan = 'Pro';
-        } else if (planAmount === 199) {
-            baseCreditsToAdd = 600;
-            upgradedPlan = 'Elite';
-        } else if (planAmount === 499) {
-            baseCreditsToAdd = 2000;
-            upgradedPlan = 'Institute';
-        } else {
-            return res.status(400).json({ success: false, error: "Security Alert: Invalid plan amount detected." });
+        if (!rzpOrder || !rzpPayment) {
+            return res.status(400).json({ success: false, error: "Could not verify payment with Razorpay." });
         }
 
+        // Verify ownership & payment status
+        if (rzpOrder.notes?.uid && rzpOrder.notes.uid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Order does not belong to this account." });
+        }
+        if (rzpPayment.order_id !== razorpay_order_id || (rzpPayment.status !== 'captured' && rzpPayment.status !== 'authorized')) {
+            return res.status(400).json({ success: false, error: "Payment is not completed." });
+        }
+        if (Number(rzpPayment.amount) < Number(rzpOrder.amount)) {
+            return res.status(400).json({ success: false, error: "Paid amount mismatch." });
+        }
+
+        // 3. 🛡️ PLAN & CREDITS STRICTLY FROM RAZORPAY ORDER NOTES + PLAN_CATALOG
+        const planAmount = Number(rzpOrder.notes?.originalPlan);
+        const plan = PLAN_CATALOG[planAmount];
+        if (!plan) {
+            return res.status(400).json({ success: false, error: "Security Alert: Invalid plan in order." });
+        }
+
+        const actualAmountPaid = Number(rzpPayment.amount) / 100;
+        const couponUsed = rzpOrder.notes?.couponUsed || 'NONE';
+
+        // 4. 🛡️ ATOMIC TRANSACTION (REPLAY ATTACK 100% BLOCKED)
+        const paymentDocRef = db.collection('successful_payments').doc(razorpay_payment_id);
         const userRef = db.collection('users').doc(req.user.uid);
-        const userDoc = await userRef.get();
-        const userData = userDoc.data() || {};
-        
-        let finalCreditsToAdd = baseCreditsToAdd;
+
+        let finalCreditsToAdd = plan.credits;
         let bonusMessage = "";
+        let referrerUidToReward = null;
 
-        // Referral Bonus Logic
-        if (userData.hasMadePurchase === false && userData.referredBy) {
-            finalCreditsToAdd += 50; 
-            bonusMessage = " (+50 Referral Bonus!)";
-            try {
-                const referrerRef = db.collection('users').doc(userData.referredBy);
-                await referrerRef.set({ credits: admin.firestore.FieldValue.increment(100) }, { merge: true });
-            } catch (e) { console.error("⚠️ Referrer update failed:", e); }
-        }
+        await db.runTransaction(async (transaction) => {
+            const existingPayDoc = await transaction.get(paymentDocRef);
+            if (existingPayDoc.exists) {
+                throw new Error("PAYMENT_ALREADY_PROCESSED");
+            }
 
-        // 1. Update Buyer Account Securely
-        await userRef.set({
-            credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
-            plan: upgradedPlan,
-            phone: xss(phone || userData.phone || ''), 
-            hasMadePurchase: true, 
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+            const userDoc = await transaction.get(userRef);
+            const userData = userDoc.exists ? userDoc.data() : {};
 
-        // 2. TEACHER COMMISSION TRACKING
-        try {
-            await db.collection('successful_payments').add({
+            if (userData.hasMadePurchase === false && userData.referredBy) {
+                finalCreditsToAdd += 50;
+                bonusMessage = " (+50 Referral Bonus!)";
+                referrerUidToReward = userData.referredBy;
+            }
+
+            // Lock payment ID permanently first
+            transaction.set(paymentDocRef, {
                 uid: req.user.uid,
-                email: req.user.email,
+                email: req.user.email || '',
                 originalPlan: planAmount,
-                amountPaid: Number(amountPaid) || 0,
-                couponUsed: couponUsed ? xss(couponUsed.toUpperCase()) : 'NONE', 
+                planName: plan.name,
+                creditsGranted: finalCreditsToAdd,
+                amountPaid: actualAmountPaid,
+                couponUsed: couponUsed,
+                razorpay_order_id: razorpay_order_id,
                 razorpay_payment_id: razorpay_payment_id,
                 timestamp: admin.firestore.FieldValue.serverTimestamp()
             });
-        } catch (dbErr) {
-            console.error("⚠️ Failed to log payment for commission.", dbErr);
+
+            transaction.set(userRef, {
+                credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
+                plan: plan.name,
+                phone: xss(phone || userData.phone || ''),
+                hasMadePurchase: true,
+                lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+        });
+
+        // Credit referrer outside critical transaction so referrer error never blocks buyer
+        if (referrerUidToReward) {
+            try {
+                await db.collection('users').doc(referrerUidToReward).set({
+                    credits: admin.firestore.FieldValue.increment(100)
+                }, { merge: true });
+            } catch (e) { console.error("⚠️ Referrer update failed:", e); }
         }
 
-        res.status(200).json({ 
-            success: true, 
+        res.status(200).json({
+            success: true,
             message: `Payment verified! Added ${finalCreditsToAdd} credits${bonusMessage}`,
-            newPlan: upgradedPlan
+            creditsAdded: finalCreditsToAdd,
+            newPlan: plan.name
         });
 
     } catch (error) {
+        if (error.message === "PAYMENT_ALREADY_PROCESSED") {
+            return res.status(409).json({ success: false, error: "This payment has already been credited." });
+        }
         console.error("🚨 Razorpay Verification Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // =======================================================================
 // 🔥 9. KICK STUDENT FROM GROUP TEST (FREE UP SEAT) 🔥
 // =======================================================================
@@ -1557,26 +1618,47 @@ app.post('/api/v1/kick-student', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 10.A CREATE MICRO-PAYMENT ORDER (DYNAMIC FEE) 🔥
+// 🔥 10.A CREATE MICRO-PAYMENT ORDER (DYNAMIC FEE + LOCK + BAN CHECK) 🔥
 // =======================================================================
 app.post('/api/v1/create-micro-order', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Please log in." });
-        
-        const { testCode } = req.body;
-        
-        // 🚨 BACKEND SECURITY: Frontend se price mat lo, DB se check karo!
-        const examDoc = await db.collection('LiveExams').doc(testCode).get();
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Please log in." });
+        }
+
+        const safeTestCode = xss(String(req.body.testCode || '').trim().toUpperCase());
+        if (!safeTestCode) return res.status(400).json({ success: false, error: "Test code is required." });
+
+        const examDoc = await db.collection('LiveExams').doc(safeTestCode).get();
         if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
-        
-        const testFee = Number(examDoc.data().fee) || 10; // Default to 10 if fee field is missing
-        
+
+        const examData = examDoc.data();
+        if (examData.status === 'inactive') {
+            return res.status(403).json({ success: false, error: "This test has been locked by the teacher." });
+        }
+
+        // 🚫 Check if student is banned by this teacher
+        if (examData.instructorUid) {
+            const teacherDoc = await db.collection('users').doc(examData.instructorUid).get();
+            const banned = teacherDoc.exists ? (teacherDoc.data().bannedStudents || []) : [];
+            if (banned.includes(req.user.uid)) {
+                return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
+            }
+        }
+
+        const testFee = Number(examData.fee) || 10;
+
         const options = {
-            amount: testFee * 100, // paise me
+            amount: Math.round(testFee * 100),
             currency: "INR",
-            receipt: `TEST_${testCode}_${req.user.uid.substring(0, 5)}`
+            receipt: `TEST_${safeTestCode}_${req.user.uid.substring(0, 5)}`,
+            notes: {
+                testCode: safeTestCode,
+                uid: req.user.uid,
+                teacherUid: examData.instructorUid || ''
+            }
         };
-        
+
         const order = await razorpay.orders.create(options);
         res.status(200).json({ success: true, order, fee: testFee });
     } catch (error) {
@@ -1586,13 +1668,18 @@ app.post('/api/v1/create-micro-order', async (req, res) => {
 });
 
 // =======================================================================
-// 🔥 10.B VERIFY MICRO-PAYMENT & DYNAMIC COMMISSION SPLIT 🔥
+// 🔥 10.B VERIFY MICRO-PAYMENT (ATOMIC ANTI-REPLAY + ANTI-SWAP) 🔥
 // =======================================================================
 app.post('/api/v1/verify-micro-payment', async (req, res) => {
     try {
-        if (!req.user || req.user.uid === 'guest_user') return res.status(403).json({ success: false, error: "Unauthorized." });
-        
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(403).json({ success: false, error: "Unauthorized." });
+        }
+
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testCode, teacherUid, testName } = req.body;
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, error: "Missing payment verification parameters." });
+        }
 
         const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET)
             .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -1602,84 +1689,96 @@ app.post('/api/v1/verify-micro-payment', async (req, res) => {
             return res.status(400).json({ success: false, error: "Signature mismatch. Payment failed." });
         }
 
-        // 🚨 FALLBACK: अगर फ्रंटएंड ने testCode या teacherUid नहीं भेजा, तो हम खुद निकाल लेंगे!
-        let finalTestCode = testCode;
-        let finalTeacherUid = teacherUid;
+        // 🛡️ Verify real order & payment directly from Razorpay
+        const [rzpOrder, rzpPayment] = await Promise.all([
+            razorpay.orders.fetch(razorpay_order_id),
+            razorpay.payments.fetch(razorpay_payment_id)
+        ]);
 
+        if (!rzpOrder || !rzpPayment || rzpPayment.order_id !== razorpay_order_id || (rzpPayment.status !== 'captured' && rzpPayment.status !== 'authorized')) {
+            return res.status(400).json({ success: false, error: "Payment is not completed." });
+        }
+        if (rzpOrder.notes?.uid && rzpOrder.notes.uid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Order does not belong to this account." });
+        }
+        if (Number(rzpPayment.amount) < Number(rzpOrder.amount)) {
+            return res.status(400).json({ success: false, error: "Paid amount mismatch." });
+        }
+
+        const finalTestCode = xss(String(rzpOrder.notes?.testCode || testCode || '').trim().toUpperCase());
         if (!finalTestCode) {
-            console.warn("⚠️ Warning: Frontend missed testCode. Attempting fallback...");
             return res.status(400).json({ success: false, error: "Security Error: Missing test code reference." });
         }
 
-        // 1. Update Student Profile (Unlock the test securely)
-        const studentRef = db.collection('users').doc(req.user.uid);
-        await studentRef.set({ unlockedTests: admin.firestore.FieldValue.arrayUnion(finalTestCode) }, { merge: true });
-
-        // 2. Fetch exact test fee and NAME from DB to calculate commission & notifications
         const examDoc = await db.collection('LiveExams').doc(finalTestCode).get();
-        
-        let testFee = 10;
-        let finalTestName = "Premium Test"; // 🔥 Added Test Name Fallback
-        
-        if (examDoc.exists) {
-            testFee = Number(examDoc.data().fee) || 10;
-            finalTestName = examDoc.data().name || "Premium Test"; // Get exact name
-            // अगर teacherUid फ्रंटएंड से नहीं आया था, तो एग्जाम डॉक्यूमेंट से निकाल ले!
-            if (!finalTeacherUid) finalTeacherUid = examDoc.data().instructorUid;
-        } else if (testName) {
-            finalTestName = testName; // Fallback to what frontend sent
-        }
+        const actualPaidRupees = Number(rzpPayment.amount) / 100;
+        const finalTestName = examDoc.exists ? (examDoc.data().name || "Premium Test") : (testName || "Premium Test");
+        const finalTeacherUid = (examDoc.exists && examDoc.data().instructorUid)
+            ? examDoc.data().instructorUid
+            : (rzpOrder.notes?.teacherUid || teacherUid || null);
 
-        // 3. Pay The Teacher (Dynamic Commission: 50% Teacher / 50% Platform)
-        const COMMISSION_RATE = 0.50; // 🔥 Updated to 50% 
-        
-        if (finalTeacherUid) {
-            const teacherEarned = testFee * COMMISSION_RATE; 
-            
-            const teacherRef = db.collection('users').doc(finalTeacherUid);
-            await teacherRef.set({
-                totalEarnings: admin.firestore.FieldValue.increment(teacherEarned),
-                walletBalance: admin.firestore.FieldValue.increment(teacherEarned) 
-            }, { merge: true });
+        const COMMISSION_RATE = 0.50;
+        const teacherEarned = Number((actualPaidRupees * COMMISSION_RATE).toFixed(2));
 
-            // Notification for Teacher
-            await db.collection('users').doc(finalTeacherUid).collection('notifications').add({
-                title: "💰 You got Paid!",
-                message: `A student unlocked your test (${finalTestName}). You earned ₹${teacherEarned.toFixed(2)}.`,
-                timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                read: false
-            });
-        } else {
-             console.error("🚨 CRITICAL: Test unlocked, but no teacherUid found to give commission!");
-        }
+        // 🛡️ ATOMIC TRANSACTION: Unlock + Teacher Credit + Payment Lock (Zero Double Credit)
+        const payRef = db.collection('successful_payments').doc(razorpay_payment_id);
+        const studentRef = db.collection('users').doc(req.user.uid);
 
-        // 4. Notification for Student (Receipt) 🔥 NEW 🔥
-        await db.collection('users').doc(req.user.uid).collection('notifications').add({
-            title: "✅ Payment Successful!",
-            message: `You paid ₹${testFee} to unlock "${finalTestName}". You can now start the test.`,
-            testCode: finalTestCode,
-            timestamp: admin.firestore.FieldValue.serverTimestamp(),
-            read: false
-        });
+        await db.runTransaction(async (transaction) => {
+            const existingPay = await transaction.get(payRef);
+            if (existingPay.exists) {
+                throw new Error("MICRO_PAYMENT_ALREADY_PROCESSED");
+            }
 
-        // 🚀 BUG 5 FIX: SAVE TO SUCCESSFUL_PAYMENTS SO SUPERADMIN CAN TRACK REVENUE 🚀
-        try {
-            await db.collection('successful_payments').add({
+            transaction.set(payRef, {
                 uid: req.user.uid,
                 email: req.user.email || 'student@notestoquiz.in',
-                originalPlan: testFee,
-                amountPaid: testFee,
+                originalPlan: actualPaidRupees,
+                amountPaid: actualPaidRupees,
                 couponUsed: 'MICRO_PAYMENT',
+                testCode: finalTestCode,
+                razorpay_order_id: razorpay_order_id,
                 razorpay_payment_id: razorpay_payment_id,
                 teacherUid: finalTeacherUid,
                 timestamp: admin.firestore.FieldValue.serverTimestamp()
             });
-        } catch (dbErr) {
-            console.error("⚠️ Failed to log micro-payment for Admin Dashboard.", dbErr);
+
+            transaction.set(studentRef, {
+                unlockedTests: admin.firestore.FieldValue.arrayUnion(finalTestCode)
+            }, { merge: true });
+
+            if (finalTeacherUid) {
+                const teacherRef = db.collection('users').doc(finalTeacherUid);
+                transaction.set(teacherRef, {
+                    totalEarnings: admin.firestore.FieldValue.increment(teacherEarned),
+                    walletBalance: admin.firestore.FieldValue.increment(teacherEarned)
+                }, { merge: true });
+            }
+        });
+
+        // Notifications outside critical transaction
+        if (finalTeacherUid) {
+            db.collection('users').doc(finalTeacherUid).collection('notifications').add({
+                title: "💰 You got Paid!",
+                message: `A student unlocked your test (${finalTestName}). You earned ₹${teacherEarned.toFixed(2)}.`,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                read: false
+            }).catch(() => {});
         }
+
+        db.collection('users').doc(req.user.uid).collection('notifications').add({
+            title: "✅ Payment Successful!",
+            message: `You paid ₹${actualPaidRupees} to unlock "${finalTestName}". You can now start the test.`,
+            testCode: finalTestCode,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            read: false
+        }).catch(() => {});
 
         res.status(200).json({ success: true, message: "Test unlocked successfully!" });
     } catch (error) {
+        if (error.message === "MICRO_PAYMENT_ALREADY_PROCESSED") {
+            return res.status(409).json({ success: false, error: "Payment already processed." });
+        }
         console.error("🚨 Micro-Payment Verify Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1692,53 +1791,50 @@ app.post('/api/v1/request-payout', async (req, res) => {
         if (!req.user || req.user.uid === 'guest_user') {
             return res.status(403).json({ success: false, error: "Unauthorized." });
         }
-        
-        const { upiId } = req.body;
+
+        const upiId = xss(String(req.body.upiId || '').trim());
         if (!upiId || !upiId.includes('@')) {
             return res.status(400).json({ success: false, error: "Invalid UPI ID." });
         }
 
-        // 1. Check real balance from database (Frontend pe trust nahi karna)
         const teacherRef = db.collection('users').doc(req.user.uid);
-        const teacherDoc = await teacherRef.get();
-        
-        if (!teacherDoc.exists) {
-            return res.status(404).json({ success: false, error: "Teacher profile not found." });
-        }
-
-        const teacherData = teacherDoc.data();
-        const currentBalance = teacherData.walletBalance || 0;
-
-        if (currentBalance < 500) {
-            return res.status(400).json({ success: false, error: `Minimum withdrawal is ₹500. Your actual balance is ₹${currentBalance}.` });
-        }
-
-        // 2. Batch write for atomicity (Paise kate toh request bhi bane, warna kuch na ho)
-        const batch = db.batch();
-        
         const payoutRef = db.collection('PayoutRequests').doc();
-        batch.set(payoutRef, {
-            teacherUid: req.user.uid,
-            teacherName: teacherData.name || 'Educator',
-            upiId: upiId,
-            amount: currentBalance,
-            status: 'Pending',
-            timestamp: admin.firestore.FieldValue.serverTimestamp()
-        });
 
-        batch.update(teacherRef, {
-            walletBalance: 0
-        });
+        await db.runTransaction(async (transaction) => {
+            const teacherDoc = await transaction.get(teacherRef);
+            if (!teacherDoc.exists) throw new Error("NOT_FOUND");
 
-        await batch.commit();
+            const teacherData = teacherDoc.data();
+            const currentBalance = Number(teacherData.walletBalance || 0);
+            if (currentBalance < 500) {
+                throw new Error(`MIN_BALANCE:${currentBalance}`);
+            }
+
+            transaction.set(payoutRef, {
+                teacherUid: req.user.uid,
+                teacherName: teacherData.name || 'Educator',
+                upiId: upiId,
+                amount: currentBalance,
+                status: 'Pending',
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            transaction.update(teacherRef, { walletBalance: 0 });
+        });
 
         res.status(200).json({ success: true, message: "Payout requested successfully!" });
     } catch (error) {
+        if (error.message === "NOT_FOUND") {
+            return res.status(404).json({ success: false, error: "Teacher profile not found." });
+        }
+        if (error.message && error.message.startsWith("MIN_BALANCE:")) {
+            const bal = error.message.split(':')[1];
+            return res.status(400).json({ success: false, error: `Minimum withdrawal is ₹500. Your actual balance is ₹${bal}.` });
+        }
         console.error("🚨 Payout Request Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // =======================================================================
 // 🔥 10.D BAN / REMOVE STUDENT FROM CLASS (100% SECURE) 🔥
 // =======================================================================
