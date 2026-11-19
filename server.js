@@ -2010,6 +2010,27 @@ app.post('/api/v1/notifications/mark-read', async (req, res) => {
     }
 });
 
+// 🛡️ GLOBAL MULTER & UPLOAD ERROR GUARD (Clean JSON instead of crash/HTML stacktrace)
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ success: false, error: "File too large! Maximum 3MB per file allowed." });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+            return res.status(400).json({ success: false, error: "Too many files! Maximum 6 files allowed per upload." });
+        }
+        return res.status(400).json({ success: false, error: `Upload error: ${err.message}` });
+    }
+    if (err && err.message === 'INVALID_FILE_TYPE') {
+        return res.status(400).json({ success: false, error: "Invalid file format! Only JPG, PNG, WEBP, and PDF files are allowed." });
+    }
+    if (err && err.message && err.message.startsWith('CORS Policy Error')) {
+        return res.status(403).json({ success: false, error: "Unauthorized origin." });
+    }
+    console.error("🚨 Unhandled Express Error:", err);
+    res.status(500).json({ success: false, error: "Internal server error." });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Production Server running on port ${PORT}`);
