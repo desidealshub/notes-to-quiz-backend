@@ -393,18 +393,21 @@ app.post('/api/v1/support-ticket', async (req, res) => {
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        try {
-            await transporter.sendMail({
-                from: process.env.EMAIL_USER,
-                to: process.env.EMAIL_USER,
-                subject: `🚨 New Support Ticket [${customTicketId}]: ${safeIssue}`,
-                text: `Ticket ID: ${customTicketId}\nName: ${activeUserName}\nEmail: ${activeUserEmail}\nIssue: ${safeIssue}\n\nDescription:\n${safeDesc}`
-            });
-            return res.status(200).json({ success: true, message: 'Ticket received securely and email sent.' });
-        } catch (emailError) {
-            console.error("🚨 Email sending failed, but ticket saved to DB:", emailError.message);
-            return res.status(200).json({ success: true, message: 'Ticket received securely (Email notification delayed).' });
-        }
+        // 🚀 Non-blocking email: DB me save hote hi turant response bhejo (Zero Button Hang)
+        transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: process.env.EMAIL_USER,
+            subject: `🚨 New Support Ticket [${customTicketId}]: ${safeIssue}`,
+            text: `Ticket ID: ${customTicketId}\nName: ${activeUserName}\nEmail: ${activeUserEmail}\nIssue: ${safeIssue}\n\nDescription:\n${safeDesc}`
+        }).catch(emailError => {
+            console.error("🚨 Background email failed (ticket already saved):", emailError.message);
+        });
+
+        return res.status(200).json({
+            success: true,
+            ticketId: customTicketId,
+            message: 'Ticket received securely.'
+        });
     } catch (error) {
         if (error.message === "TICKET_DAILY_LIMIT") {
             return res.status(429).json({ success: false, error: "You have reached the daily limit of 3 support tickets. Please wait for our reply." });
