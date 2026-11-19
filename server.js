@@ -1245,10 +1245,14 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
     try {
         const classCode = xss(req.params.code.trim().toUpperCase());
         const studentName = req.query.name ? xss(req.query.name.trim()) : null;
+        const reqUid = (req.query.uid && req.query.uid !== 'guest')
+            ? xss(req.query.uid.trim())
+            : (req.user && req.user.uid && req.user.uid !== 'guest_user' ? req.user.uid : null);
 
         const [classDoc, historySnapshot] = await Promise.all([
             db.collection('LiveExams').doc(classCode).get(),
-            db.collection('history').where('groupCode', '==', classCode).select('candidateDetails', 'score', 'time').get()
+            // 🔥 FIX 1: 'userId' aur 'isReattempt' ko select() mein add kiya!
+            db.collection('history').where('groupCode', '==', classCode).select('candidateDetails', 'score', 'time', 'userId', 'isReattempt').get()
         ]);
         if (!classDoc.exists) {
             return res.status(404).json({ success: false, error: "Class not found." });
@@ -1258,18 +1262,22 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         let totalScoreSum = 0;
 
         historySnapshot.forEach(doc => {
-            const sc = Number(doc.data().score) || 0;
+            const d = doc.data();
+            if (d.isReattempt === true) return; // Practice re-attempts ko rank mein mat gino
+
+            const sc = Number(d.score) || 0;
             totalScoreSum += sc;
-            students.push({ 
-                uid: doc.data().userId || doc.id, // 🔥 BUG 3 FIX: Fetch specific UID
-                name: doc.data().candidateDetails?.name || "Student", 
+            students.push({
+                uid: d.userId || doc.id,
+                name: d.candidateDetails?.name || "Student",
                 score: sc,
-                timeTaken: doc.data().time || "00:00"
+                timeTaken: d.time || "00:00"
             });
         });
 
         const totalStudents = students.length;
-        const averageScore = totalStudents > 0 ? Math.round(totalScoreSum / totalStudents) : 0;
+        // 🔥 FIX 2: Math.round hataya taaki 1.5 (15%) round hokar 2 (20%) na bane!
+        const averageScore = totalStudents > 0 ? Number((totalScoreSum / totalStudents).toFixed(2)) : 0;
 
         students.sort((a, b) => b.score - a.score);
 
@@ -1282,17 +1290,23 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
             if (previousScore !== null && students[i].score < previousScore) {
                 currentRank++;
             }
-            
-            const rankObj = { rank: currentRank, name: students[i].name, score: students[i].score, time: students[i].timeTaken };
+
+            // 🔥 FIX 3: rankObj mein 'uid' include kiya taaki frontend strictly UID se (You) lagaye!
+            const rankObj = {
+                rank: currentRank,
+                uid: students[i].uid,
+                name: students[i].name,
+                score: students[i].score,
+                time: students[i].timeTaken
+            };
             rankedStudents.push(rankObj);
             previousScore = students[i].score;
 
-            // 🔥 BUG 3 FIX: Match strictly by UID instead of Name
-            const reqUid = req.query.uid;
+            // Strict UID match first, name fallback only if no UID
             if (reqUid && students[i].uid === reqUid) {
                 if (!currentUserRankData) currentUserRankData = rankObj;
             } else if (!reqUid && studentName && students[i].name && students[i].name.toLowerCase() === studentName.toLowerCase()) {
-                if (!currentUserRankData) currentUserRankData = rankObj; // Fallback for old requests
+                if (!currentUserRankData) currentUserRankData = rankObj;
             }
         }
 
@@ -1314,7 +1328,6 @@ app.get('/api/v1/leaderboard/:code', async (req, res) => {
         res.status(500).json({ success: false, error: "Leaderboard error" });
     }
 });
-
 // =======================================================================
 // 🔥 7.A CHECK COUPON (FOR FRONTEND UI) 🔥
 // =======================================================================
