@@ -413,44 +413,76 @@ app.post('/api/v1/support-ticket', async (req, res) => {
         res.status(500).json({ success: false, error: "Could not save the ticket." });
     }
 });
-// 🔥 FETCH PREVIOUS SUPPORT TICKETS (PERMANENT FIX) 🔥
+// 🔥 FETCH PREVIOUS SUPPORT TICKETS (ZERO-INDEX CRASH + IST DATE/TIME + ADMIN REPLY) 🔥
 app.get('/api/v1/my-tickets', async (req, res) => {
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        if (!req.user || req.user.uid === 'guest_user') {
             return res.status(200).json({ success: true, tickets: [] });
         }
-        const idToken = authHeader.split('Bearer ')[1];
-        const decodedToken = await admin.auth().verifyIdToken(idToken);
-        const uid = decodedToken.uid;
 
-        // PERMANENT FIX: orderBy wapas add kar diya
+        const uid = req.user.uid;
+        // 🛡️ No .orderBy() here = Zero Firestore Composite Index Crash (sorted in JS below)
         const snapshot = await db.collection('SupportTickets')
             .where('uid', '==', uid)
-            .orderBy('createdAt', 'desc')
-            .limit(20) 
+            .limit(50)
             .get();
 
-        let myTickets = [];
+        const formatIST = (ms) => new Date(ms).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+
+        const myTickets = [];
         snapshot.forEach(doc => {
             const d = doc.data();
-            const createdMs = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().getTime() : Date.now();
+            let createdMs = Date.now();
+            if (d.createdAt && typeof d.createdAt.toDate === 'function') {
+                createdMs = d.createdAt.toDate().getTime();
+            } else if (d.userReportedTime) {
+                createdMs = Number(d.userReportedTime) || Date.now();
+            } else if (doc.id.startsWith('TKT-')) {
+                const parsed = Number(doc.id.replace('TKT-', ''));
+                if (!isNaN(parsed) && parsed > 1000000000000) createdMs = parsed;
+            }
+
+            const rawReply = String(d.adminReply || d.reply || '').trim();
+            let repliedAtStr = null;
+            if (rawReply) {
+                let repliedMs = null;
+                if (d.repliedAt && typeof d.repliedAt.toDate === 'function') {
+                    repliedMs = d.repliedAt.toDate().getTime();
+                } else if (d.repliedAt) {
+                    repliedMs = Number(d.repliedAt) || null;
+                }
+                if (repliedMs) repliedAtStr = formatIST(repliedMs);
+            }
+
             myTickets.push({
-                id: doc.id,
-                issueType: d.issueType,
-                description: d.description,
-                status: d.status || 'Open',
-                date: new Date(createdMs).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                id: d.ticketId || doc.id,
+                issueType: d.issueType || 'General Query',
+                description: d.description || '',
+                status: d.status || (rawReply ? 'Replied' : 'Open'),
+                createdMs: createdMs,
+                dateTime: formatIST(createdMs),
+                adminReply: rawReply,
+                repliedAt: repliedAtStr
             });
         });
-        
-        res.status(200).json({ success: true, tickets: myTickets });
+
+        // Newest TKT-XXXXXXXX first
+        myTickets.sort((a, b) => b.createdMs - a.createdMs);
+
+        res.status(200).json({ success: true, tickets: myTickets.slice(0, 20) });
     } catch (error) {
         console.error("🚨 Fetch Tickets Error:", error);
         res.status(500).json({ success: false, error: "Failed to fetch tickets." });
     }
 });
-
 // 🔥 "CHAT WITH SOLUTION" (SECURED: AUTH + LENGTH + 15/DAY QUOTA + XSS GUARD)
 app.post('/api/v1/chat-tutor', async (req, res) => {
     let quotaDeducted = false;
