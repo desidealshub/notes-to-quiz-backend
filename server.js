@@ -346,6 +346,139 @@ app.get('/api/ping', (req, res) => {
 });
 
 // =======================================================================
+// 🛡️ PERMANENT SELF-HEAL HELPER (NEVER ALLOW EMPTY USER SHELL DOCS AGAIN)
+// =======================================================================
+async function ensureUserProfileServer(uid, fallbackName = '', fallbackEmail = '') {
+    if (!uid || uid === 'guest_user') return;
+    const userRef = db.collection('users').doc(uid);
+    const userDoc = await userRef.get();
+    const d = userDoc.exists ? (userDoc.data() || {}) : {};
+
+    const needsHeal = !userDoc.exists || !d.name || !d.email || !d.role || !d.plan || d.credits === undefined || !d.createdAt;
+    if (!needsHeal) return;
+
+    let authUser = null;
+    try { authUser = await admin.auth().getUser(uid); } catch (e) {}
+
+    const resolvedEmail = (authUser && authUser.email) || fallbackEmail || '';
+    const resolvedName = (authUser && authUser.displayName) || fallbackName || (resolvedEmail ? resolvedEmail.split('@')[0] : 'Student');
+
+    const updates = {};
+    if (!d.name) updates.name = xss(String(resolvedName).slice(0, 80));
+    if (!d.email && resolvedEmail) updates.email = xss(String(resolvedEmail).slice(0, 120));
+    if (!d.role) updates.role = 'student';
+    if (!d.plan) updates.plan = 'Free';
+    if (d.credits === undefined || d.credits === null) updates.credits = 30;
+    if (d.hasMadePurchase === undefined) updates.hasMadePurchase = false;
+    if (!d.createdAt) {
+        const createdDate = (authUser && authUser.metadata && authUser.metadata.creationTime)
+            ? new Date(authUser.metadata.creationTime)
+            : new Date();
+        updates.createdAt = admin.firestore.Timestamp.fromDate(createdDate);
+    }
+    if (!d.lastLogin) {
+        const lastDate = (authUser && authUser.metadata && (authUser.metadata.lastSignInTime || authUser.metadata.creationTime))
+            ? new Date(authUser.metadata.lastSignInTime || authUser.metadata.creationTime)
+            : new Date();
+        updates.lastLogin = admin.firestore.Timestamp.fromDate(lastDate);
+    }
+
+    if (Object.keys(updates).length > 0) {
+        await userRef.set(updates, { merge: true });
+    }
+}
+
+// 🔄 Logged-in user ke liye automatic profile sync endpoint
+app.post('/api/v1/sync-profile', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Unauthorized." });
+        }
+        await ensureUserProfileServer(req.user.uid, req.user.name, req.user.email);
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error("🚨 Sync Profile Error:", error);
+        res.status(500).json({ success: false, error: "Profile sync failed." });
+    }
+});
+
+// 🚑 ONE-CLICK SUPERADMIN RECOVERY: Auth ke saare 38+ users ko Firestore me heal/backfill karega
+app.post('/api/v1/admin/sync-auth-users', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid !== 'J4BHVnJOhrcgFnuoZwA7Sz9XMdo2' || req.user.email !== 'shishirk0401@gmail.com') {
+            return res.status(403).json({ success: false, error: "Superadmin access only." });
+        }
+
+        let nextPageToken = undefined;
+        let totalAuthUsers = 0;
+        let createdDocs = 0;
+        let healedDocs = 0;
+        let batch = db.batch();
+        let batchOps = 0;
+
+        do {
+            const listResult = await admin.auth().listUsers(1000, nextPageToken);
+            nextPageToken = listResult.pageToken;
+
+            for (const authUser of listResult.users) {
+                totalAuthUsers++;
+                const userRef = db.collection('users').doc(authUser.uid);
+                const docSnap = await userRef.get();
+                const exists = docSnap.exists;
+                const d = exists ? (docSnap.data() || {}) : {};
+
+                const email = authUser.email || '';
+                const name = authUser.displayName || (email ? email.split('@')[0] : 'Student');
+                const updates = {};
+
+                if (!exists || !d.name) updates.name = xss(String(name).slice(0, 80));
+                if ((!exists || !d.email) && email) updates.email = xss(String(email).slice(0, 120));
+                if (!exists || !d.role) updates.role = 'student';
+                if (!exists || !d.plan) updates.plan = 'Free';
+                if (!exists || d.credits === undefined || d.credits === null) updates.credits = 30;
+                if (!exists || d.hasMadePurchase === undefined) updates.hasMadePurchase = false;
+                if (!exists || !d.createdAt) {
+                    const cTime = authUser.metadata && authUser.metadata.creationTime ? new Date(authUser.metadata.creationTime) : new Date();
+                    updates.createdAt = admin.firestore.Timestamp.fromDate(cTime);
+                }
+                if (!exists || !d.lastLogin) {
+                    const lTime = authUser.metadata && (authUser.metadata.lastSignInTime || authUser.metadata.creationTime)
+                        ? new Date(authUser.metadata.lastSignInTime || authUser.metadata.creationTime)
+                        : new Date();
+                    updates.lastLogin = admin.firestore.Timestamp.fromDate(lTime);
+                }
+
+                if (Object.keys(updates).length > 0) {
+                    batch.set(userRef, updates, { merge: true });
+                    batchOps++;
+                    if (!exists) createdDocs++;
+                    else healedDocs++;
+
+                    if (batchOps === 400) {
+                        await batch.commit();
+                        batch = db.batch();
+                        batchOps = 0;
+                    }
+                }
+            }
+        } while (nextPageToken);
+
+        if (batchOps > 0) await batch.commit();
+
+        res.status(200).json({
+            success: true,
+            totalAuthUsers,
+            createdDocs,
+            healedDocs,
+            message: `Synced ${totalAuthUsers} Auth users (${createdDocs} new docs created, ${healedDocs} incomplete docs healed).`
+        });
+    } catch (error) {
+        console.error("🚨 Admin Auth Sync Error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =======================================================================
 // 🔥 HACK-PROOF & SEQUENTIAL SUPPORT TICKET SYSTEM 🔥
 // =======================================================================
 
@@ -1343,6 +1476,8 @@ app.post('/api/v1/join-workspace', async (req, res) => {
         }
 
         const coachingName = tData.coachingName || tData.name || "Premium Educator";
+
+        await ensureUserProfileServer(req.user.uid, req.user.name, req.user.email);
 
         await Promise.all([
             db.collection('users').doc(req.user.uid).set({
