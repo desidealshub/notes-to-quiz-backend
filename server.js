@@ -1350,7 +1350,7 @@ app.post('/api/v1/verify-class', async (req, res) => {
 
         const group = docRef.data();
 
-        if (group.status === 'inactive') {
+        if (String(group.status || 'active').trim().toLowerCase() !== 'active') {
             return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
         }
 
@@ -1419,7 +1419,7 @@ app.post('/api/v1/start-exam', async (req, res) => {
         if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
 
         const group = examDoc.data();
-        if (group.status === 'inactive') {
+        if (String(group.status || 'active').trim().toLowerCase() !== 'active') {
             return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
         }
 
