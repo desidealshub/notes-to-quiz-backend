@@ -1297,6 +1297,40 @@ app.post('/api/v1/create-class', upload.array('files', 6), async (req, res) => {
         res.status(500).json({ success: false, error: error.message || "Failed to generate class. Check files." });
     }
 });
+
+// =======================================================================
+// 🔒 2.B TEACHER TOGGLE TEST LOCK / UNLOCK (ADMIN SDK — 100% RELIABLE)
+// =======================================================================
+app.post('/api/v1/toggle-test-status', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Unauthorized. Please log in." });
+        }
+
+        const safeCode = xss(String(req.body.code || '').trim().toUpperCase());
+        const isActive = Boolean(req.body.isActive);
+        if (!safeCode) return res.status(400).json({ success: false, error: "Test code missing." });
+
+        const examRef = db.collection('LiveExams').doc(safeCode);
+        const examDoc = await examRef.get();
+        if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
+
+        if (examDoc.data().instructorUid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Access Denied. You do not own this test." });
+        }
+
+        const newStatus = isActive ? 'active' : 'inactive';
+        await examRef.update({
+            status: newStatus,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        res.status(200).json({ success: true, code: safeCode, status: newStatus });
+    } catch (error) {
+        console.error("🚨 Toggle Test Status Error:", error);
+        res.status(500).json({ success: false, error: "Failed to update test lock status." });
+    }
+});
 // =======================================================================
 // 🔥 3.A STUDENT JOINS A CLASS (METADATA ONLY — ZERO QUESTION/ANSWER LEAK) 🔥
 // =======================================================================
