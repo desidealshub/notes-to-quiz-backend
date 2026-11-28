@@ -957,16 +957,17 @@ app.post('/api/v1/generate-custom-test', async (req, res) => {
 
         // 2. THE ULTIMATE DYNAMIC AI PROMPT
         const prompt = `You are an elite, highly experienced examiner and paper setter strictly for ${examContext} ${boardContext}. 
-        YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on the topic "${chapter}".
+        YOUR TASK: Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) or Numerical questions for the subject "${subject}" ${streamContext}, focusing strictly on: "${chapter}".
+        If multiple chapters/topics are listed above, distribute the ${qCount} questions EVENLY across ALL listed chapters so no chapter is skipped.
         
         ${languageInstruction}
         Difficulty Level: ${difficultyLevel}.
 
-        🔥 CRITICAL PYQ & SYLLABUS BOUNDARY INSTRUCTION: 
-        1. TARGET LOCK: Since the target exam is explicitly ${examContext}, you MUST ONLY provide Previous Year Questions (PYQs) that ACTUALLY appeared in ${examContext} exams.
-        2. STRICT BAN ON MIXING: NEVER include PYQs from higher or irrelevant exams. For example, if the target is "Class 10th", DO NOT include questions from CUET, JEE, NEET, NDA, or SSC. If the target is "BPSC", DO NOT include UPSC or Railway questions unless they perfectly match the exact syllabus difficulty. 
-        3. TAGGING: If a question is a REAL PYQ from ${examContext}, add the exact exam name and year in the 'pyqTag' field (e.g., '${examContext} 2022'). If it is a newly generated practice question, leave 'pyqTag' strictly empty ("").
-
+        🔥 CRITICAL SYLLABUS BOUNDARY & HONESTY INSTRUCTION: 
+        1. TARGET LOCK: Strictly match the syllabus and difficulty of ${examContext} ${boardContext}. NEVER mix questions from higher or irrelevant exams (e.g. never put JEE/NEET/SSC questions in Class 10th).
+        2. PURE OBJECTIVE ONLY: Never generate letter-writing, essay-format, or paragraph-dependent questions without providing the full text.
+        3. ZERO FAKE YEAR TAGS: Leave 'pyqTag' strictly as an empty string ("") unless you are 100% certain of the exact question and year. Never invent or guess an exam year.
+        
         CRITICAL SCHEMA: Return ONLY a raw JSON array matching this exact structure. DO NOT wrap it in markdown code blocks like \`\`\`json. Return raw JSON only:
         [ 
           { 
@@ -1331,6 +1332,426 @@ app.post('/api/v1/toggle-test-status', async (req, res) => {
         res.status(500).json({ success: false, error: "Failed to update test lock status." });
     }
 });
+
+// =======================================================================
+// 🛡️ SAFE RICH-TEXT SANITIZER (KEEPS LATEX '<', '>' & <b>/<br>, KILLS XSS)
+// =======================================================================
+function sanitizeExamRichText(raw, maxLen = 4000) {
+    return String(raw == null ? '' : raw)
+        .slice(0, maxLen)
+        .replace(/<(script|iframe|object|embed|style|svg|form|input|link|meta)[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<(script|iframe|object|embed|style|svg|img|link|meta|form|input)[^>]*\/?>/gi, '')
+        .replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '')
+        .replace(/javascript:/gi, '')
+        .trim();
+}
+
+function sanitizeQuestionsPayload(rawQuestions, maxAllowed) {
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return [];
+    return rawQuestions.slice(0, maxAllowed).map((q) => {
+        const opts = (q && q.options && typeof q.options === 'object') ? q.options : {};
+        const qType = ['single', 'multiple', 'integer'].includes(q && q.type) ? q.type : 'single';
+        return {
+            type: qType,
+            question: sanitizeExamRichText(q && q.question, 2500),
+            options: qType === 'integer' ? {} : {
+                A: sanitizeExamRichText(opts.A, 800),
+                B: sanitizeExamRichText(opts.B, 800),
+                C: sanitizeExamRichText(opts.C, 800),
+                D: sanitizeExamRichText(opts.D, 800)
+            },
+            correctAnswer: xss(String((q && q.correctAnswer) || 'A').trim().toUpperCase().slice(0, 20)),
+            explanation: sanitizeExamRichText((q && q.explanation) || '', 3000)
+        };
+    }).filter((q) => q.question.length > 0);
+}
+
+// =======================================================================
+// 📂 2.C PDF STUDIO CLOUD HISTORY (GET / SAVE / DELETE — ZERO AI COST)
+// =======================================================================
+app.get('/api/v1/pdf-papers', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to sync saved papers." });
+        }
+
+        const snap = await db.collection('users').doc(req.user.uid).collection('pdf_papers').limit(50).get();
+        const papers = [];
+        snap.forEach((doc) => {
+            const d = doc.data() || {};
+            papers.push({
+                id: doc.id,
+                title: d.title || 'Untitled Paper',
+                subject: d.subject || 'General',
+                className: d.className || '',
+                instituteName: d.instituteName || '',
+                questionCount: Number(d.questionCount) || (Array.isArray(d.questions) ? d.questions.length : 0),
+                linkedLiveCode: d.linkedLiveCode || null,
+                linkedMode: d.linkedMode || 'draft',
+                meta: d.meta || {},
+                questions: Array.isArray(d.questions) ? d.questions : [],
+                updatedAtMs: Number(d.updatedAtMs) || Date.now()
+            });
+        });
+
+        papers.sort((a, b) => (b.updatedAtMs || 0) - (a.updatedAtMs || 0));
+        res.status(200).json({ success: true, papers: papers.slice(0, 40) });
+    } catch (error) {
+        console.error("🚨 Fetch PDF Papers Error:", error);
+        res.status(500).json({ success: false, error: "Failed to load saved papers." });
+    }
+});
+
+app.post('/api/v1/pdf-papers', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to save papers." });
+        }
+
+        const rawId = String(req.body.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+        const paperId = rawId || `paper_${Date.now().toString(36)}`;
+
+        const cleanQuestions = sanitizeQuestionsPayload(req.body.questions, 150);
+        if (cleanQuestions.length === 0) {
+            return res.status(400).json({ success: false, error: "Cannot save an empty paper." });
+        }
+
+        const rawMeta = (req.body.meta && typeof req.body.meta === 'object') ? req.body.meta : {};
+        const cleanMeta = {
+            instituteName: xss(String(rawMeta.instituteName || '').slice(0, 120)),
+            instituteSub: xss(String(rawMeta.instituteSub || '').slice(0, 180)),
+            headerFont: ['serif', 'sans', 'hindi'].includes(rawMeta.headerFont) ? rawMeta.headerFont : 'serif',
+            testTitle: xss(String(rawMeta.testTitle || req.body.title || 'Untitled Paper').slice(0, 140)),
+            className: xss(String(rawMeta.className || req.body.className || '').slice(0, 80)),
+            subjectName: xss(String(rawMeta.subjectName || req.body.subject || '').slice(0, 80)),
+            fullMarks: xss(String(rawMeta.fullMarks || cleanQuestions.length).slice(0, 20)),
+            timeAllowed: xss(String(rawMeta.timeAllowed || '30 Mins').slice(0, 30)),
+            examDate: xss(String(rawMeta.examDate || '').slice(0, 30)),
+            colLayout: rawMeta.colLayout === '1' ? '1' : '2',
+            fontSize: ['compact', 'standard', 'large'].includes(rawMeta.fontSize) ? rawMeta.fontSize : 'standard',
+            optStyle: rawMeta.optStyle === 'stack' ? 'stack' : 'grid',
+            instructions: xss(String(rawMeta.instructions || '').slice(0, 350)),
+            showStudentStrip: Boolean(rawMeta.showStudentStrip !== false),
+            includeAnswerKey: Boolean(rawMeta.includeAnswerKey !== false),
+            includeExplanations: Boolean(rawMeta.includeExplanations),
+            customFooterText: xss(String(rawMeta.customFooterText || '').slice(0, 180))
+        };
+
+        const validModes = ['draft', 'live', 'solution_only', 'hidden'];
+        const safeMode = validModes.includes(req.body.linkedMode) ? req.body.linkedMode : 'draft';
+        const safeCode = req.body.linkedLiveCode ? xss(String(req.body.linkedLiveCode).trim().toUpperCase().slice(0, 16)) : null;
+
+        await db.collection('users').doc(req.user.uid).collection('pdf_papers').doc(paperId).set({
+            id: paperId,
+            title: cleanMeta.testTitle,
+            subject: cleanMeta.subjectName || 'General',
+            className: cleanMeta.className,
+            instituteName: cleanMeta.instituteName,
+            questionCount: cleanQuestions.length,
+            linkedLiveCode: safeCode,
+            linkedMode: safeMode,
+            meta: cleanMeta,
+            questions: cleanQuestions,
+            updatedAtMs: Date.now(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        res.status(200).json({ success: true, id: paperId });
+    } catch (error) {
+        console.error("🚨 Save PDF Paper Error:", error);
+        res.status(500).json({ success: false, error: "Failed to save paper." });
+    }
+});
+
+app.delete('/api/v1/pdf-papers/:paperId', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Unauthorized." });
+        }
+        const safeId = String(req.params.paperId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+        if (!safeId) return res.status(400).json({ success: false, error: "Invalid paper ID." });
+
+        await db.collection('users').doc(req.user.uid).collection('pdf_papers').doc(safeId).delete();
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error("🚨 Delete PDF Paper Error:", error);
+        res.status(500).json({ success: false, error: "Failed to delete paper." });
+    }
+});
+
+// =======================================================================
+// 🚀 2.D PUBLISH EDITED PDF PAPER TO ONLINE CLASS (0 EXTRA CREDITS!)
+// =======================================================================
+app.post('/api/v1/publish-ready-test', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to publish to your class." });
+        }
+
+        const userDoc = await db.collection('users').doc(req.user.uid).get();
+        const uData = userDoc.exists ? (userDoc.data() || {}) : {};
+        const userPlan = uData.plan || 'Free';
+
+        let maxAllowedQs = 15;
+        if (userPlan === 'Starter') maxAllowedQs = 30;
+        if (userPlan === 'Pro') maxAllowedQs = 50;
+        if (userPlan === 'Elite') maxAllowedQs = 100;
+        if (userPlan === 'Institute') maxAllowedQs = 150;
+
+        const cleanQuestions = sanitizeQuestionsPayload(req.body.questions, maxAllowedQs);
+        if (cleanQuestions.length === 0) {
+            return res.status(400).json({ success: false, error: "Please add at least 1 valid question before publishing." });
+        }
+
+        const safeName = xss(String(req.body.testName || '').trim().slice(0, 120));
+        if (!safeName) return res.status(400).json({ success: false, error: "Online test name is required." });
+
+        const mode = ['live', 'solution_only', 'hidden'].includes(req.body.mode) ? req.body.mode : 'live';
+        const statusMap = { live: 'active', solution_only: 'solution_only', hidden: 'inactive' };
+        const finalStatus = statusMap[mode];
+
+        const duration = Math.max(5, Math.min(240, Number(req.body.duration) || 30));
+        const capacity = Math.max(1, Math.min(500, Number(req.body.capacity) || 50));
+
+        // 🛡️ Plan-gated paid test fee: Only Elite (₹199) & Institute (₹499) can charge student fees
+        const canChargeFee = (userPlan === 'Elite' || userPlan === 'Institute');
+        const requestedFee = Number(req.body.fee) || 0;
+        const allowedFees = [0, 10, 20, 30];
+        const finalFee = (mode === 'live' && canChargeFee && allowedFees.includes(requestedFee)) ? requestedFee : 0;
+        const isPaidTest = finalFee > 0;
+
+        const requireBatch = Boolean(req.body.reqBatch);
+        const requireRoll = Boolean(req.body.reqRoll);
+        const requirePhone = Boolean(req.body.reqPhone);
+
+        let allowedRolls = [];
+        if (!isPaidTest && requireRoll && req.body.allowedRolls) {
+            const rawRolls = Array.isArray(req.body.allowedRolls)
+                ? req.body.allowedRolls
+                : String(req.body.allowedRolls).split(/[\n,]+/);
+            allowedRolls = rawRolls.map((r) => xss(String(r).trim())).filter(Boolean).slice(0, 500);
+        }
+
+        // Reuse existing test code if already published (no duplicate tests)
+        let targetCode = req.body.existingCode ? xss(String(req.body.existingCode).trim().toUpperCase()) : '';
+        let isUpdatingExisting = false;
+
+        if (targetCode) {
+            const existingDoc = await db.collection('LiveExams').doc(targetCode).get();
+            if (existingDoc.exists) {
+                if (existingDoc.data().instructorUid !== req.user.uid) {
+                    return res.status(403).json({ success: false, error: "Access Denied. You do not own this linked test." });
+                }
+                isUpdatingExisting = true;
+            } else {
+                targetCode = '';
+            }
+        }
+
+        if (!targetCode) {
+            const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
+            targetCode = `SK${randomHex}`;
+        }
+
+        const isPremiumTeacher = (userPlan !== 'Free');
+        const finalExpiresAt = isPremiumTeacher
+            ? (Date.now() + 100 * 365 * 24 * 60 * 60 * 1000)
+            : (Date.now() + 24 * 60 * 60 * 1000);
+
+        const examPayload = {
+            code: targetCode,
+            name: safeName,
+            instructorUid: req.user.uid,
+            instructorEmail: req.user.email || '',
+            instructorName: uData.coachingName || req.user.name || 'Educator',
+            duration,
+            requireBatch,
+            requireRoll,
+            requirePhone,
+            maxStudents: capacity,
+            expiresAt: finalExpiresAt,
+            quizData: cleanQuestions,
+            requiresPayment: isPaidTest,
+            fee: finalFee,
+            allowedRolls,
+            publishMode: mode,
+            status: finalStatus,
+            isDeleted: false,
+            source: 'pdf_studio',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (!isUpdatingExisting) {
+            examPayload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+
+        await db.collection('LiveExams').doc(targetCode).set(examPayload, { merge: true });
+
+        // Link code back to saved pdf_papers doc if present
+        const rawPaperId = String(req.body.paperId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+        if (rawPaperId) {
+            db.collection('users').doc(req.user.uid).collection('pdf_papers').doc(rawPaperId).set({
+                linkedLiveCode: targetCode,
+                linkedMode: mode,
+                updatedAtMs: Date.now()
+            }, { merge: true }).catch(() => {});
+        }
+
+        // Notify enrolled students ONLY if Live or Solution Mode (never for Hidden Draft)
+        if (mode === 'live' || mode === 'solution_only') {
+            const notiTitle = mode === 'live' ? "📝 New Test Assigned!" : "💡 Solutions & AI Tutor Live!";
+            const notiBody = mode === 'live'
+                ? `Your teacher published "${safeName}". Tap to start.`
+                : `Solutions & AI Doubt Tutor are now live for "${safeName}".`;
+
+            db.collection('users').doc(req.user.uid).collection('my_students').get().then(async (snap) => {
+                if (snap.empty) return;
+                let batch = db.batch();
+                let ops = 0;
+                const tokenSet = new Set();
+                const studentDocs = await Promise.all(snap.docs.map((d) => db.collection('users').doc(d.id).get()));
+
+                studentDocs.forEach((sDoc) => {
+                    if (!sDoc.exists) return;
+                    const ref = db.collection('users').doc(sDoc.id).collection('notifications').doc();
+                    batch.set(ref, {
+                        title: notiTitle,
+                        message: notiBody,
+                        testCode: targetCode,
+                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                        read: false
+                    });
+                    ops++;
+                    const sd = sDoc.data() || {};
+                    if (sd.fcmToken && typeof sd.fcmToken === 'string') tokenSet.add(sd.fcmToken);
+                    if (Array.isArray(sd.fcmTokens)) sd.fcmTokens.forEach((t) => { if (t && typeof t === 'string') tokenSet.add(t); });
+                });
+
+                if (ops > 0) await batch.commit();
+
+                const tokens = Array.from(tokenSet);
+                if (tokens.length > 0) {
+                    const messaging = admin.messaging();
+                    const sendFn = typeof messaging.sendEachForMulticast === 'function'
+                        ? messaging.sendEachForMulticast.bind(messaging)
+                        : messaging.sendMulticast.bind(messaging);
+                    for (let i = 0; i < tokens.length; i += 500) {
+                        await sendFn({
+                            notification: { title: notiTitle, body: notiBody },
+                            data: { title: notiTitle, body: notiBody, testCode: targetCode, url: "https://notestoquiz.in" },
+                            tokens: tokens.slice(i, i + 500)
+                        }).catch(() => {});
+                    }
+                }
+            }).catch((err) => console.error("⚠️ Publish notification warning:", err.message));
+        }
+
+        res.status(200).json({
+            success: true,
+            code: targetCode,
+            mode,
+            status: finalStatus,
+            updatedExisting: isUpdatingExisting
+        });
+    } catch (error) {
+        console.error("🚨 Publish Ready Test Error:", error);
+        res.status(500).json({ success: false, error: error.message || "Failed to publish test." });
+    }
+});
+
+// =======================================================================
+// 💡 2.E STUDENT SOLUTION & AI TUTOR FETCHER (FOR SOLUTION-ONLY MODE)
+// =======================================================================
+app.get('/api/v1/student-solution/:code', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Please log in to view solutions." });
+        }
+
+        const safeCode = xss(String(req.params.code || '').trim().toUpperCase());
+        if (!safeCode) return res.status(400).json({ success: false, error: "Test code missing." });
+
+        const examDoc = await db.collection('LiveExams').doc(safeCode).get();
+        if (!examDoc.exists || examDoc.data().isDeleted === true) {
+            return res.status(404).json({ success: false, error: "Test not found." });
+        }
+
+        const g = examDoc.data();
+        const isOwner = (g.instructorUid === req.user.uid);
+        const isSolutionMode = (g.publishMode === 'solution_only' || String(g.status || '').toLowerCase() === 'solution_only');
+
+        if (!isOwner && g.instructorUid) {
+            const teacherDoc = await db.collection('users').doc(g.instructorUid).get();
+            const banned = (teacherDoc.exists && Array.isArray(teacherDoc.data().bannedStudents)) ? teacherDoc.data().bannedStudents : [];
+            if (banned.includes(req.user.uid)) {
+                return res.status(403).json({ success: false, error: "You have been removed from this coaching class." });
+            }
+        }
+
+        // Only allow viewing answers if: Owner OR Solution-Only Mode OR Student already attempted this test
+        if (!isOwner && !isSolutionMode) {
+            const attemptSnap = await db.collection('history')
+                .where('groupCode', '==', safeCode)
+                .where('userId', '==', req.user.uid)
+                .limit(1)
+                .get();
+            if (attemptSnap.empty) {
+                return res.status(403).json({ success: false, error: "Solutions unlock only after attempting the test or when enabled by your teacher." });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            code: safeCode,
+            name: g.name || 'Class Test',
+            publishMode: g.publishMode || 'live',
+            quizData: Array.isArray(g.quizData) ? g.quizData : []
+        });
+    } catch (error) {
+        console.error("🚨 Student Solution Fetch Error:", error);
+        res.status(500).json({ success: false, error: "Failed to load solutions." });
+    }
+});
+
+// =======================================================================
+// 🗑️ 2.F TEACHER SAFE DELETE TEST (0 ATTEMPTS = HARD, 1+ = SOFT DELETE)
+// =======================================================================
+app.post('/api/v1/delete-test', async (req, res) => {
+    try {
+        if (!req.user || req.user.uid === 'guest_user') {
+            return res.status(401).json({ success: false, error: "Unauthorized. Please log in." });
+        }
+
+        const safeCode = xss(String(req.body.code || '').trim().toUpperCase());
+        if (!safeCode) return res.status(400).json({ success: false, error: "Test code missing." });
+
+        const examRef = db.collection('LiveExams').doc(safeCode);
+        const examDoc = await examRef.get();
+        if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
+
+        if (examDoc.data().instructorUid !== req.user.uid) {
+            return res.status(403).json({ success: false, error: "Access Denied. You do not own this test." });
+        }
+
+        const attemptSnap = await db.collection('history').where('groupCode', '==', safeCode).limit(1).get();
+        if (attemptSnap.empty) {
+            await examRef.delete();
+            return res.status(200).json({ success: true, mode: 'hard', message: "Test permanently deleted." });
+        }
+
+        await examRef.update({
+            isDeleted: true,
+            status: 'inactive',
+            publishMode: 'hidden',
+            deletedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        res.status(200).json({ success: true, mode: 'soft', message: "Test permanently removed from your class." });
+    } catch (error) {
+        console.error("🚨 Delete Test Error:", error);
+        res.status(500).json({ success: false, error: "Failed to delete test." });
+    }
+});
+
 // =======================================================================
 // 🔥 3.A STUDENT JOINS A CLASS (METADATA ONLY — ZERO QUESTION/ANSWER LEAK) 🔥
 // =======================================================================
@@ -1350,7 +1771,14 @@ app.post('/api/v1/verify-class', async (req, res) => {
 
         const group = docRef.data();
 
-        if (String(group.status || 'active').trim().toLowerCase() !== 'active') {
+        if (group.isDeleted === true) {
+            return res.status(404).json({ success: false, error: "This test has been removed by your teacher." });
+        }
+        const statusLow = String(group.status || 'active').trim().toLowerCase();
+        if (statusLow === 'solution_only' || group.publishMode === 'solution_only') {
+            return res.status(403).json({ success: false, error: "💡 This test is in Solution & AI Tutor Mode. Open View Solution directly." });
+        }
+        if (statusLow !== 'active') {
             return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
         }
 
@@ -1419,7 +1847,14 @@ app.post('/api/v1/start-exam', async (req, res) => {
         if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
 
         const group = examDoc.data();
-        if (String(group.status || 'active').trim().toLowerCase() !== 'active') {
+        if (group.isDeleted === true) {
+            return res.status(404).json({ success: false, error: "This test has been removed by your teacher." });
+        }
+        const statusLow = String(group.status || 'active').trim().toLowerCase();
+        if (statusLow === 'solution_only' || group.publishMode === 'solution_only') {
+            return res.status(403).json({ success: false, error: "💡 This test is in Solution & AI Tutor Mode. Open View Solution directly." });
+        }
+        if (statusLow !== 'active') {
             return res.status(403).json({ success: false, error: "🔒 This test has been locked by your teacher." });
         }
 
@@ -1607,10 +2042,14 @@ app.get('/api/v1/student-workspace/:teacherUid', async (req, res) => {
 
         examsSnap.forEach(doc => {
             const t = doc.data();
+            if (t.isDeleted === true) return;
             const isPaid = Boolean(t.requiresPayment || (Number(t.fee) > 0));
             const createdMs = (t.createdAt && typeof t.createdAt.toMillis === 'function')
                 ? t.createdAt.toMillis()
                 : (Number(t.createdAt) || 0);
+
+            const resolvedStatus = String(t.status || 'active').trim().toLowerCase();
+            const resolvedMode = t.publishMode || (resolvedStatus === 'solution_only' ? 'solution_only' : (resolvedStatus === 'inactive' ? 'hidden' : 'live'));
 
             // 🛡️ ZERO PAPER LEAK: Sirf metadata bhejo, quizData nahi!
             tests.push({
@@ -1626,11 +2065,11 @@ app.get('/api/v1/student-workspace/:teacherUid', async (req, res) => {
                 requireRoll: Boolean(t.requireRoll),
                 requirePhone: Boolean(t.requirePhone),
                 status: t.status || 'active',
+                publishMode: resolvedMode,
                 expiresAt: t.expiresAt || null,
                 createdAtMs: createdMs
             });
         });
-
         tests.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 
         res.status(200).json({
@@ -2375,8 +2814,8 @@ app.post('/api/v1/create-micro-order', async (req, res) => {
         if (!examDoc.exists) return res.status(404).json({ success: false, error: "Test not found." });
 
         const examData = examDoc.data();
-        if (examData.status === 'inactive') {
-            return res.status(403).json({ success: false, error: "This test has been locked by the teacher." });
+        if (examData.isDeleted === true || String(examData.status || 'active').trim().toLowerCase() !== 'active') {
+            return res.status(403).json({ success: false, error: "This test is locked or removed by the teacher." });
         }
 
         // 🚫 Check if student is banned by this teacher
