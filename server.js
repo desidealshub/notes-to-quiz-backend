@@ -1433,8 +1433,13 @@ app.post('/api/v1/pdf-papers', async (req, res) => {
             instructions: xss(String(rawMeta.instructions || '').slice(0, 350)),
             showStudentStrip: Boolean(rawMeta.showStudentStrip !== false),
             includeAnswerKey: Boolean(rawMeta.includeAnswerKey !== false),
-            includeExplanations: Boolean(rawMeta.includeExplanations),
-            customFooterText: xss(String(rawMeta.customFooterText || '').slice(0, 180))
+          includeExplanations: Boolean(rawMeta.includeExplanations),
+            customFooterText: xss(String(rawMeta.customFooterText || '').slice(0, 180)),
+            topRightTag: xss(String(rawMeta.topRightTag ?? '*** Best of Luck ***').slice(0, 60)),
+            logoBW: Boolean(rawMeta.logoBW !== false),
+            logoDataUrl: (typeof rawMeta.logoDataUrl === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(rawMeta.logoDataUrl) && rawMeta.logoDataUrl.length <= 60000)
+                ? rawMeta.logoDataUrl
+                : ''
         };
 
         const validModes = ['draft', 'live', 'solution_only', 'hidden'];
@@ -1491,6 +1496,16 @@ app.post('/api/v1/publish-ready-test', async (req, res) => {
         const userDoc = await db.collection('users').doc(req.user.uid).get();
         const uData = userDoc.exists ? (userDoc.data() || {}) : {};
         const userPlan = uData.plan || 'Free';
+        const userRole = String(uData.role || 'student').trim().toLowerCase();
+        const isSuperadmin = (req.user.uid === 'J4BHVnJOhrcgFnuoZwA7Sz9XMdo2' || req.user.email === 'shishirk0401@gmail.com');
+
+        if (!isSuperadmin && (userPlan !== 'Institute' || (userRole !== 'teacher' && userRole !== 'educator'))) {
+            return res.status(403).json({
+                success: false,
+                code: 'TEACHER_DASHBOARD_REQUIRED',
+                error: "🔒 Push to Online Class requires ₹499 Institute Plan + Activated Teacher Dashboard. Contact Shishir on WhatsApp to activate."
+            });
+        }
 
         let maxAllowedQs = 15;
         if (userPlan === 'Starter') maxAllowedQs = 30;
@@ -2517,8 +2532,9 @@ const PLAN_CATALOG = Object.freeze({
     49:  { name: 'Starter',   credits: 100,  maxQs: 30  },
     99:  { name: 'Pro',       credits: 250,  maxQs: 50  },
     199: { name: 'Elite',     credits: 600,  maxQs: 100 },
-    499: { name: 'Institute', credits: 1000, maxQs: 150 }
+    499: { name: 'Institute', credits: 1800, maxQs: 150 }
 });
+const PLAN_RANK = Object.freeze({ Free: 0, Starter: 1, Pro: 2, Elite: 3, Institute: 4 });
 
 // =======================================================================
 // 🔥 7.A CHECK COUPON (FOR FRONTEND UI) 🔥
@@ -2712,9 +2728,14 @@ app.post('/api/v1/verify-payment', async (req, res) => {
                 timestamp: admin.firestore.FieldValue.serverTimestamp()
             });
 
+            const existingPlan = userData.plan || 'Free';
+            const keepPlan = ((PLAN_RANK[existingPlan] || 0) > (PLAN_RANK[plan.name] || 0))
+                ? existingPlan
+                : plan.name;
+
             transaction.set(userRef, {
                 credits: admin.firestore.FieldValue.increment(finalCreditsToAdd),
-                plan: plan.name,
+                plan: keepPlan,
                 phone: xss(phone || userData.phone || ''),
                 hasMadePurchase: true,
                 lastUpdated: admin.firestore.FieldValue.serverTimestamp()
